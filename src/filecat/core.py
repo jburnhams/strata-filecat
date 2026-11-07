@@ -72,7 +72,7 @@ def scan_root(c, cl, label, path):
             try: st = os.lstat(fp)
             except OSError: continue
             if os.path.islink(fp) or not os.path.isfile(fp): continue
-            rel = os.path.relpath(fp, path); mt = int(st.st_mtime)
+            rel = os.path.relpath(fp, path).replace(os.sep, '/'); mt = int(st.st_mtime)         # always '/' in the catalogue, so one path means the same on every OS
             r = c.execute(sel, (cl['id'], label, rel)).fetchone()
             if r and r[1] == st.st_size and (r[2] is not None or r[3] == mt): c.execute('UPDATE files SET seen_gen=? WHERE id=?', (gen, r[0])); same += 1
             else:

@@ -111,3 +111,9 @@ def test_other_invocations_are_not_blocked_while_a_big_file_is_being_hashed(db, 
     other = sqlite3.connect(str(tmp_path / 'cat.db'), timeout=0.5)         # would raise 'database is locked' if the hasher held a write transaction
     other.execute("UPDATE collections SET note='x'"); other.commit(); connect()                    # and connect() must not need the write lock either
     release.set(); t.join(); assert result['n'] == 2
+
+
+def test_scanned_paths_use_forward_slashes(db, tree):
+    root = tree('c', {'a/b/c.txt': b'1'}); core.add_collection(db, 'c', roots=[f'r={root}']); core.scan_root(db, core.coll(db, 'c'), 'r', str(root))
+    assert one(db, 'SELECT path FROM files')[0] == 'a/b/c.txt'
+    assert core.hash_pending(db, 10) == 1                                    # and a '/' path resolves to the file on every OS
