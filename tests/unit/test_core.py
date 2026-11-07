@@ -92,3 +92,21 @@ def test_cli_end_to_end(tmp_path, monkeypatch, capsys):
     main(['collection', 'add', 'demo', '--root', f'r={d},autoscan', '--note', 'demo']); main(['run', '--seconds', '10']); main(['collection', 'list']); main(['report']); main(['dups', '--min-size', '1'])
     out = capsys.readouterr().out
     assert 'collection demo added' in out and 'demo [plain] 1 files' in out and 'r: ' in out and 'hashed 1 files' in out and '== demo [plain]' in out
+
+def test_other_invocations_are_not_blocked_while_a_big_file_is_being_hashed(db, tmp_path, monkeypatch):
+    """Hashing a multi-GB file takes minutes; a second filecat call (the extractor hook, a report) must not wait for it."""
+    import sqlite3, threading
+    from filecat.db import connect
+    d = tmp_path / 'd'; d.mkdir(); (d / 'a.bin').write_bytes(b'1'); (d / 'b.bin').write_bytes(b'22')
+    core.add_collection(db, 'c', roots=[f'r={d}']); core.scan_root(db, core.coll(db, 'c'), 'r', str(d))
+    started, release, result = threading.Event(), threading.Event(), {}
+    real = core.sha256_file
+    def slow(p):
+        if p.endswith('b.bin'): started.set(); release.wait(10)          # b.bin is hashed second: the first file's row has just been written
+        return real(p)
+    monkeypatch.setattr(core, 'sha256_file', slow)
+    t = threading.Thread(target=lambda: result.update(n=core.hash_pending(connect(), 30))); t.start()
+    assert started.wait(10)
+    other = sqlite3.connect(str(tmp_path / 'cat.db'), timeout=0.5)         # would raise 'database is locked' if the hasher held a write transaction
+    other.execute("UPDATE collections SET note='x'"); other.commit(); connect()                    # and connect() must not need the write lock either
+    release.set(); t.join(); assert result['n'] == 2

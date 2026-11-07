@@ -105,9 +105,10 @@ def hash_pending(c, seconds, only=None):
             if base is None: c.execute("UPDATE files SET state='error' WHERE id=?", (fid,)); continue
             fp = os.path.join(base, path)
             try:
-                if os.stat(fp).st_size != size: c.execute("UPDATE files SET state='size-mismatch' WHERE id=?", (fid,)); continue
-                c.execute('UPDATE files SET sha256=? WHERE id=?', (sha256_file(fp), fid)); done += 1; nbytes += size
-            except FileNotFoundError: c.execute("UPDATE files SET state='missing' WHERE id=?", (fid,))
+                if os.stat(fp).st_size != size: c.execute("UPDATE files SET state='size-mismatch' WHERE id=?", (fid,)); c.commit(); continue
+                digest = sha256_file(fp)                   # slow (a big video takes minutes): no write transaction may be open meanwhile, or every other filecat call waits
+                c.execute('UPDATE files SET sha256=? WHERE id=?', (digest, fid)); c.commit(); done += 1; nbytes += size
+            except FileNotFoundError: c.execute("UPDATE files SET state='missing' WHERE id=?", (fid,)); c.commit()
             except OSError as e: print('hash error', fp[:100], e, file=sys.stderr)
         c.commit()
     left = c.execute("SELECT COUNT(*),COALESCE(SUM(size),0) FROM files WHERE sha256 IS NULL AND current=1 AND state='ok'").fetchone()

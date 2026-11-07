@@ -24,5 +24,6 @@ def connect(path=None):
     os.makedirs(os.path.dirname(path) or '.', exist_ok=True)
     c = sqlite3.connect(path, timeout=120)
     c.execute('PRAGMA journal_mode=WAL'); c.execute('PRAGMA synchronous=NORMAL')
-    c.executescript(SCHEMA); c.execute(f'PRAGMA user_version={SCHEMA_VERSION}'); c.commit()
+    if c.execute('PRAGMA user_version').fetchone()[0] < SCHEMA_VERSION:       # only write when the schema needs creating: a long-running writer (hashing) must not block every other invocation
+        c.executescript(SCHEMA); c.execute(f'PRAGMA user_version={SCHEMA_VERSION}'); c.commit()
     return c
