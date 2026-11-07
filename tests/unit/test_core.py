@@ -100,9 +100,10 @@ def test_other_invocations_are_not_blocked_while_a_big_file_is_being_hashed(db, 
     d = tmp_path / 'd'; d.mkdir(); (d / 'a.bin').write_bytes(b'1'); (d / 'b.bin').write_bytes(b'22')
     core.add_collection(db, 'c', roots=[f'r={d}']); core.scan_root(db, core.coll(db, 'c'), 'r', str(d))
     started, release, result = threading.Event(), threading.Event(), {}
-    real = core.sha256_file
+    real, calls = core.sha256_file, []
     def slow(p):
-        if p.endswith('b.bin'): started.set(); release.wait(10)          # b.bin is hashed second: the first file's row has just been written
+        calls.append(p)
+        if len(calls) == 2: started.set(); release.wait(10)             # the SECOND file blocks, so the first file's UPDATE has just been issued (os.walk order is arbitrary)
         return real(p)
     monkeypatch.setattr(core, 'sha256_file', slow)
     t = threading.Thread(target=lambda: result.update(n=core.hash_pending(connect(), 30))); t.start()
