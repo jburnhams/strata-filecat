@@ -182,7 +182,7 @@ def test_a_catalogue_from_before_alembic_is_adopted_not_recreated(tmp_path, monk
 def test_where_the_catalogue_is(tmp_path, monkeypatch):
     """FILECAT_DB wins, then ~/.config/filecat/database, then the default SQLite file; a Postgres URL gets search_path filecat."""
     from filecat import db as dbm
-    monkeypatch.setenv('HOME', str(tmp_path)); monkeypatch.delenv('FILECAT_DB', raising=False)
+    monkeypatch.setenv('HOME', str(tmp_path)); monkeypatch.setenv('USERPROFILE', str(tmp_path)); monkeypatch.delenv('FILECAT_DB', raising=False)   # USERPROFILE: ~ on Windows
     assert dbm.db_url() == 'sqlite:///' + str(tmp_path / '.local/share/filecat/catalog.db')
     (tmp_path / '.config/filecat').mkdir(parents=True); (tmp_path / '.config/filecat/database').write_text('postgresql:///omarchy\n')
     assert dbm.db_url() == 'postgresql+psycopg:///omarchy?options=-csearch_path%3Dfilecat'
