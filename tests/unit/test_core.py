@@ -58,9 +58,9 @@ def test_ingest_archive_strip_skip_and_versions(db, tmp_path, capsys):
 def test_same_size_and_crc_inherits_the_hash(db, tmp_path):
     core.add_collection(db, 'c', roots=[f'r={tmp_path}']); cl = core.coll(db, 'c')
     core.ingest_archive(db, cl, make_zip(tmp_path / 'a.zip', {'x/f.txt': 'same'}), strip=1)
-    db.execute("UPDATE files SET sha256=X'AA'"); db.commit()
+    db.execute("UPDATE files SET sha256=?", (b'\xaa',)); db.commit()
     core.ingest_archive(db, cl, make_zip(tmp_path / 'b.zip', {'x/f.txt': 'same'}), strip=1)
-    assert one(db, 'SELECT hex(sha256) FROM files WHERE current=1')[0] == 'AA'
+    assert bytes(one(db, 'SELECT sha256 FROM files WHERE current=1')[0]) == b'\xaa'
 
 def test_plain_profile_maps_and_rejects_traversal():
     p = Plain({}, None, strip=1, skip=['Skip/'])
@@ -84,7 +84,7 @@ def test_profile_plugin_and_pending_archives(db, tmp_path, monkeypatch):
     make_zip(tmp_path / 'p1.zip', {'T/a.txt': 'x'})
     core.add_collection(db, 'fk', profile='fake', roots=[f'r={tmp_path}'], config={'dir': str(tmp_path), 'strip': '1'})
     core.run_all(db, 5); core.run_all(db, 5)                                    # the second run must not ingest again
-    assert one(db, 'SELECT COUNT(*) FROM sources WHERE kind="archive"')[0] == 1 and one(db, 'SELECT export_ts FROM sources WHERE kind="archive"')[0] == '2026'
+    assert one(db, "SELECT COUNT(*) FROM sources WHERE kind='archive'")[0] == 1 and one(db, "SELECT export_ts FROM sources WHERE kind='archive'")[0] == '2026'
 
 def test_cli_end_to_end(tmp_path, monkeypatch, capsys):
     from filecat.cli import main
@@ -93,6 +93,7 @@ def test_cli_end_to_end(tmp_path, monkeypatch, capsys):
     out = capsys.readouterr().out
     assert 'collection demo added' in out and 'demo [plain] 1 files' in out and 'r: ' in out and 'hashed 1 files' in out and '== demo [plain]' in out
 
+@pytest.mark.sqlite_only
 def test_other_invocations_are_not_blocked_while_a_big_file_is_being_hashed(db, tmp_path, monkeypatch):
     """Hashing a multi-GB file takes minutes; a second filecat call (the extractor hook, a report) must not wait for it."""
     import sqlite3, threading
@@ -152,3 +153,67 @@ def test_cli_passes_stop_when(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv('FILECAT_DB', str(tmp_path / 'c.db')); d = tmp_path / 'd'; d.mkdir(); (d / 'a.txt').write_text('x')
     main(['collection', 'add', 'x', '--root', f'r={d},autoscan']); main(['run', '--seconds', '10', '--stop-when', 'true']); assert 'yielded' in capsys.readouterr().out
     main(['run', '--seconds', '10', '--stop-when', 'false']); assert 'hashed 1 files' in capsys.readouterr().out
+
+
+OLD_SCHEMA = """CREATE TABLE collections(id INTEGER PRIMARY KEY, name TEXT UNIQUE NOT NULL, profile TEXT NOT NULL DEFAULT 'plain', note TEXT, config TEXT NOT NULL DEFAULT '{}', created_at INTEGER);
+CREATE TABLE roots(id INTEGER PRIMARY KEY, collection_id INTEGER NOT NULL REFERENCES collections(id), label TEXT NOT NULL, path TEXT NOT NULL, autoscan INTEGER NOT NULL DEFAULT 0, UNIQUE(collection_id, label));
+CREATE TABLE sources(id INTEGER PRIMARY KEY, collection_id INTEGER NOT NULL REFERENCES collections(id), name TEXT NOT NULL, kind TEXT NOT NULL, export_ts TEXT, size INTEGER, mtime INTEGER, entries INTEGER, ingested_at INTEGER, UNIQUE(collection_id, name));
+CREATE TABLE files(id INTEGER PRIMARY KEY, collection_id INTEGER NOT NULL, root TEXT NOT NULL, path TEXT NOT NULL, size INTEGER NOT NULL, crc32 INTEGER, sha256 BLOB, mtime INTEGER, source_id INTEGER NOT NULL, export_ts TEXT, state TEXT NOT NULL DEFAULT 'ok', current INTEGER NOT NULL DEFAULT 1, orig_path TEXT, seen_gen INTEGER);
+PRAGMA user_version=2;"""
+
+
+@pytest.mark.sqlite_only
+def test_a_catalogue_from_before_alembic_is_adopted_not_recreated(tmp_path, monkeypatch, tree):
+    """An existing SQLite catalogue (hand-written schema, PRAGMA user_version 2) keeps its rows: connect() stamps it at
+    the first revision instead of creating the tables again, and everything works on it."""
+    import sqlite3
+    from filecat.db import connect
+    p = tmp_path / 'old.db'; old = sqlite3.connect(p); old.executescript(OLD_SCHEMA)
+    old.execute("INSERT INTO collections(name, profile) VALUES('kept', 'plain')"); old.commit(); old.close()
+    monkeypatch.setenv('FILECAT_DB', str(p))
+    c = connect()
+    assert c.execute('SELECT version_num FROM alembic_version').scalar() == '0001'
+    assert [r[0] for r in c.execute('SELECT name FROM collections')] == ['kept']
+    d = tree('d', {'a.txt': b'x'}); core.add_collection(c, 'new', roots=[f'r={d}']); core.scan_root(c, core.coll(c, 'new'), 'r', str(d))
+    assert one(c, 'SELECT COUNT(*) FROM files')[0] == 1
+    c.close(); assert connect().execute('SELECT version_num FROM alembic_version').scalar() == '0001'   # idempotent
+
+
+def test_where_the_catalogue_is(tmp_path, monkeypatch):
+    """FILECAT_DB wins, then ~/.config/filecat/database, then the default SQLite file; a Postgres URL gets search_path filecat."""
+    from filecat import db as dbm
+    monkeypatch.setenv('HOME', str(tmp_path)); monkeypatch.setenv('USERPROFILE', str(tmp_path)); monkeypatch.delenv('FILECAT_DB', raising=False)   # USERPROFILE: ~ on Windows
+    assert dbm.db_url() == 'sqlite:///' + str(tmp_path / '.local/share/filecat/catalog.db')
+    (tmp_path / '.config/filecat').mkdir(parents=True); (tmp_path / '.config/filecat/database').write_text('postgresql:///omarchy\n')
+    assert dbm.db_url() == 'postgresql+psycopg:///omarchy?options=-csearch_path%3Dfilecat'
+    monkeypatch.setenv('FILECAT_DB', str(tmp_path / 'x.db'))
+    assert dbm.db_url() == 'sqlite:///' + str(tmp_path / 'x.db')
+
+
+def test_report_counts_unhashed_versions_of_different_size_as_versions(db, tree, capsys):
+    """A path scanned twice with a different size (no CRC, no hash yet) has two versions: the COALESCE over
+    crc32, sha256, size must fall through to size (SQLite's hex(NULL) is '', which would stop it)."""
+    d = tree('d', {'a.txt': b'one'})
+    core.add_collection(db, 'c', roots=[f'r={d}']); cl = core.coll(db, 'c')
+    core.scan_root(db, cl, 'r', str(d)); (d / 'a.txt').write_bytes(b'longer'); core.scan_root(db, cl, 'r', str(d))
+    capsys.readouterr(); report.report(db, 'c')
+    assert 'paths with more than one version: 1' in capsys.readouterr().out
+
+
+@pytest.mark.pg_only
+def test_import_handles_an_empty_table_and_verifies(tmp_path, db_url):
+    """scripts/import-sqlite into Postgres: an empty table (no roots) must not break the sequence reset, and the
+    copy verifies; the first id handed out afterwards is still 1."""
+    import subprocess, sys
+    from filecat.db import connect
+    src = tmp_path / 'src.db'; c = connect(str(src))
+    c.execute("INSERT INTO collections(name, profile) VALUES('c', 'plain')"); c.commit(); c.close()
+    dst = db_url + ('&' if '?' in db_url else '?') + 'options=-csearch_path%3Dfilecat'
+    dst = dst.replace('postgresql+psycopg://', 'postgresql://')
+    script = os.path.join(os.path.dirname(__file__), '..', '..', 'scripts', 'import-sqlite')
+    r = subprocess.run([sys.executable, script, '--src', str(src), '--dst', dst], capture_output=True, text=True)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert 'verified: identical' in r.stdout
+    c = connect(dst)
+    assert c.execute("INSERT INTO roots(collection_id, label, path) VALUES(1, 'r', '/x') RETURNING id").scalar_one() == 1
+    c.close()

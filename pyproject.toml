@@ -5,16 +5,26 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "strata-filecat"
 version = "0.1.0"
-description = "One SQLite catalogue and SHA-256 index for many file collections"
+description = "One catalogue and SHA-256 index for many file collections (SQLite, or the shared PostgreSQL on omarchy)"
 readme = "README.md"
 requires-python = ">=3.11"
-dependencies = []                      # standard library only, on purpose
+# omarchy-db (SQLAlchemy, Alembic, psycopg) is in github.com/jburnhams/database (python/); it is not on PyPI, so install it
+# first: pip install "omarchy-db @ git+https://github.com/jburnhams/database@main#subdirectory=python" (strata-takeout's install.sh does).
+dependencies = ["omarchy-db>=0.1"]
 
 [project.scripts]
 filecat = "filecat.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+filecat = ["migrations/*.py"]
+
+[tool.omarchy-db]
+app = "filecat"
+models = "filecat.models:Base"
+migrations = "src/filecat/migrations"
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]
