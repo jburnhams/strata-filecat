@@ -12,7 +12,7 @@ def roots_of(c, cid): return {l: (p, a) for l, p, a in c.execute('SELECT label,p
 def add_collection(c, name, profile='plain', roots=(), config=None, note=None):
     load_profile(profile)                                            # fail early if the plugin is missing
     with c:
-        cid = c.execute('INSERT INTO collections(name,profile,note,config,created_at) VALUES(?,?,?,?,?)', (name, profile, note, json.dumps(config or {}), int(time.time()))).lastrowid
+        cid = c.execute('INSERT INTO collections(name,profile,note,config,created_at) VALUES(?,?,?,?,?) RETURNING id', (name, profile, note, json.dumps(config or {}), int(time.time()))).scalar_one()
         for r in roots:
             lab, _, rest = r.partition('='); path, _, flag = rest.partition(',')
             c.execute('INSERT INTO roots(collection_id,label,path,autoscan) VALUES(?,?,?,?)', (cid, lab, os.path.abspath(os.path.expanduser(path)), 1 if flag == 'autoscan' else 0))
@@ -21,7 +21,7 @@ def add_collection(c, name, profile='plain', roots=(), config=None, note=None):
 def source(c, cid, name, kind, ts=None, size=None, mtime=None, entries=None):
     r = c.execute('SELECT id FROM sources WHERE collection_id=? AND name=?', (cid, name)).fetchone()
     if r: return r[0]
-    return c.execute('INSERT INTO sources(collection_id,name,kind,export_ts,size,mtime,entries,ingested_at) VALUES(?,?,?,?,?,?,?,?)', (cid, name, kind, ts, size, mtime, entries, int(time.time()))).lastrowid
+    return c.execute('INSERT INTO sources(collection_id,name,kind,export_ts,size,mtime,entries,ingested_at) VALUES(?,?,?,?,?,?,?,?) RETURNING id', (cid, name, kind, ts, size, mtime, entries, int(time.time()))).scalar_one()
 
 def add_version(c, cid, root, rel, size, crc, mtime, sid, ts, orig, inherit=True):
     """New row for a path; the row it replaces stops being current. Same size + CRC32 as the replaced version inherits its hash."""
@@ -63,7 +63,10 @@ def scan_root(c, cl, label, path):
     if not os.path.isdir(path): print(f'{cl["name"]}:{label}: {path} missing, skipped', file=sys.stderr); return
     gen = c.execute('SELECT COALESCE(MAX(seen_gen),0)+1 FROM files').fetchone()[0]          # a counter, not a timestamp: two scans in one second must stay distinguishable
     sid = source(c, cl['id'], 'scan:' + label, 'scan'); new = chg = same = 0
-    sel = 'SELECT id,size,crc32,mtime FROM files WHERE collection_id=? AND root=? AND path=? AND current=1'
+    # One read of the root's current rows instead of a query per file (a round trip each is slow against a server),
+    # and unchanged files marked seen in batches.
+    have = {p: (i, s, cr, m) for i, p, s, cr, m in c.execute('SELECT id,path,size,crc32,mtime FROM files WHERE collection_id=? AND root=? AND current=1', (cl['id'], label))}
+    seen = []
     for dp, dn, fns in os.walk(path):
         dn[:] = [d for d in dn if not d.startswith('.')]
         for fn in fns:
@@ -73,12 +76,14 @@ def scan_root(c, cl, label, path):
             except OSError: continue
             if os.path.islink(fp) or not os.path.isfile(fp): continue
             rel = os.path.relpath(fp, path).replace(os.sep, '/'); mt = int(st.st_mtime)         # always '/' in the catalogue, so one path means the same on every OS
-            r = c.execute(sel, (cl['id'], label, rel)).fetchone()
-            if r and r[1] == st.st_size and (r[2] is not None or r[3] == mt): c.execute('UPDATE files SET seen_gen=? WHERE id=?', (gen, r[0])); same += 1
+            r = have.get(rel)
+            if r and r[1] == st.st_size and (r[2] is not None or r[3] == mt): seen.append(r[0]); same += 1
             else:
                 add_version(c, cl['id'], label, rel, st.st_size, None, mt, sid, None, None, inherit=False)
                 c.execute('UPDATE files SET seen_gen=? WHERE collection_id=? AND root=? AND path=? AND current=1', (gen, cl['id'], label, rel)); chg += bool(r); new += not r
+        if len(seen) >= 5000: c.execute_ids('UPDATE files SET seen_gen=:gen WHERE id IN :ids', seen, gen=gen); seen = []
         c.commit()
+    if seen: c.execute_ids('UPDATE files SET seen_gen=:gen WHERE id IN :ids', seen, gen=gen)
     gone = c.execute("UPDATE files SET current=0, state='missing' WHERE collection_id=? AND root=? AND current=1 AND state='ok' AND (seen_gen IS NULL OR seen_gen<>?)", (cl['id'], label, gen)).rowcount
     c.commit(); print(f'{cl["name"]}:{label}: {new:,} new, {chg:,} changed, {same:,} unchanged, {gone:,} gone')
 
@@ -103,7 +108,7 @@ def hash_pending(c, seconds, only=None, stop_when=None):
     paths = {(cid, l): p for cid, l, p in c.execute('SELECT collection_id,label,path FROM roots')}
     q = "SELECT id,collection_id,root,path,size FROM files WHERE sha256 IS NULL AND current=1 AND state='ok'" + (' AND collection_id=%d' % coll(c, only)['id'] if only else '') + ' ORDER BY id LIMIT 200'
     while time.time() < end:
-        rows = c.execute(q).fetchall()
+        rows = c.execute(q).fetchall(); c.commit()          # end the read transaction: nothing may stay open while a big file is hashed
         if not rows: break
         for fid, cid, root, path, size in rows:
             if time.time() >= end: break
@@ -122,7 +127,7 @@ def hash_pending(c, seconds, only=None, stop_when=None):
         c.commit()
     left = c.execute("SELECT COUNT(*),COALESCE(SUM(size),0) FROM files WHERE sha256 IS NULL AND current=1 AND state='ok'").fetchone()
     if yst['y']: print('yielded: the stop-when command succeeded (another job is busy on the disk)')
-    print(f'hashed {done} files ({nbytes/1e9:.1f} GB); still to hash: {left[0]} files ({left[1]/1e9:.1f} GB)')
+    print(f'hashed {done} files ({nbytes/1e9:.1f} GB); still to hash: {left[0]} files ({float(left[1])/1e9:.1f} GB)')
     return done
 
 def run_all(c, seconds, stop_when=None):

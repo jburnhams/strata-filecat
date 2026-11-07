@@ -21,9 +21,41 @@ jobs:
             python-version: '3.13'
     steps:
       - uses: actions/checkout@v4
+      # omarchy-db (the database layer) is in the private repo jburnhams/database: needs a read-only token secret
+      - uses: actions/checkout@v4
+        with:
+          repository: jburnhams/database
+          path: _database
+          token: ${{ secrets.DATABASE_REPO_TOKEN }}
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-      - run: pip install -r requirements-test.txt && pip install -e .
+      - run: pip install -r requirements-test.txt && pip install ./_database/python && pip install -e .
       - run: ruff check src tests
       - run: pytest
+
+  postgres:
+    # the same tests on a real PostgreSQL 18 (as on omarchy), through omarchy_db's pytest plugin (--pg)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_PASSWORD: postgres  # throwaway CI container gitleaks:allow
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      OMARCHY_DB_TEST_ADMIN_URL: postgresql://postgres:postgres@localhost:5432/postgres  # throwaway CI container gitleaks:allow
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: jburnhams/database
+          path: _database
+          token: ${{ secrets.DATABASE_REPO_TOKEN }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - run: pip install -r requirements-test.txt && pip install ./_database/python && pip install -e .
+      - run: pytest --pg

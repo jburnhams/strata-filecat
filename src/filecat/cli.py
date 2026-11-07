@@ -4,7 +4,7 @@ from . import core, report
 from .db import connect
 
 def build_parser():
-    ap = argparse.ArgumentParser(prog='filecat', description='One SQLite catalogue and SHA-256 index for many file collections.'); sub = ap.add_subparsers(dest='cmd', required=True)
+    ap = argparse.ArgumentParser(prog='filecat', description='One catalogue and SHA-256 index for many file collections (SQLite or PostgreSQL: FILECAT_DB).'); sub = ap.add_subparsers(dest='cmd', required=True)
     col = sub.add_parser('collection', help='add or list collections').add_subparsers(dest='sub', required=True)
     x = col.add_parser('add'); x.add_argument('name'); x.add_argument('--profile', default='plain'); x.add_argument('--root', action='append', help='LABEL=PATH[,autoscan]'); x.add_argument('--set', action='append', help='key=value profile config'); x.add_argument('--note')
     col.add_parser('list')
