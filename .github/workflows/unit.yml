@@ -21,16 +21,10 @@ jobs:
             python-version: '3.13'
     steps:
       - uses: actions/checkout@v4
-      # omarchy-db (the database layer) is in the private repo jburnhams/database: needs a read-only token secret
-      - uses: actions/checkout@v4
-        with:
-          repository: jburnhams/database
-          path: _database
-          token: ${{ secrets.DATABASE_REPO_TOKEN }}
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-      - run: pip install -r requirements-test.txt && pip install ./_database/python && pip install -e .
+      - run: pip install -r requirements-test.txt && pip install "omarchy-db @ git+https://github.com/jburnhams/database@main#subdirectory=python" && pip install -e .
       - run: ruff check src tests
       - run: pytest
 
@@ -49,13 +43,8 @@ jobs:
       OMARCHY_DB_TEST_ADMIN_URL: postgresql://postgres:postgres@localhost:5432/postgres  # throwaway CI container gitleaks:allow
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/checkout@v4
-        with:
-          repository: jburnhams/database
-          path: _database
-          token: ${{ secrets.DATABASE_REPO_TOKEN }}
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
-      - run: pip install -r requirements-test.txt && pip install ./_database/python && pip install -e .
+      - run: pip install -r requirements-test.txt && pip install "omarchy-db @ git+https://github.com/jburnhams/database@main#subdirectory=python" && pip install -e .
       - run: pytest --pg

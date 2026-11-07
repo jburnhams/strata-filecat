@@ -8,8 +8,8 @@ version = "0.1.0"
 description = "One catalogue and SHA-256 index for many file collections (SQLite, or the shared PostgreSQL on omarchy)"
 readme = "README.md"
 requires-python = ">=3.11"
-# omarchy-db (SQLAlchemy, Alembic, psycopg) is in the private repo jburnhams/database (python/); it is not on PyPI, so
-# install it from a checkout first: pip install -e ../database/python (strata-takeout's install.sh does).
+# omarchy-db (SQLAlchemy, Alembic, psycopg) is in github.com/jburnhams/database (python/); it is not on PyPI, so install it
+# first: pip install "omarchy-db @ git+https://github.com/jburnhams/database@main#subdirectory=python" (strata-takeout's install.sh does).
 dependencies = ["omarchy-db>=0.1"]
 
 [project.scripts]
