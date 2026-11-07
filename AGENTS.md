@@ -7,5 +7,5 @@ strata-filecat: one SQLite catalogue and SHA-256 index for many file collections
 - Model: a collection has root directories and a profile; `files` keeps one row per path per source and `current=1` is the version on disk; SHA-256 is computed in time-boxed resumable slices. CRC32 from archive indexes only makes *candidates*. It catalogues; it never extracts, moves or deletes files.
 - Profiles are plugins: classes registered in the entry point group `filecat.profiles` (see the docstring in `profiles.py`). Keep service-specific rules out of this repo.
 - Style: dense, comment-the-why, long lines are fine (ruff line-length 400). Keep it dependency-free.
-- Changing the schema: bump `SCHEMA_VERSION` and add a migration step in `db.connect`; the live DB on omarchy is `~/.local/share/filecat/catalog.db`, back it up first (`sqlite3 .backup`).
-- Notes and decisions go in `docs/progress.md`; the machine-level job doc is in the private `docs` repo (`tech/machines/omarchy/jobs/filecat.md`).
+- Changing the schema: bump `SCHEMA_VERSION` and add a migration step in `db.connect`; the default DB is `~/.local/share/filecat/catalog.db`, back it up first (`sqlite3 .backup`).
+- Notes and decisions go in `docs/progress.md`.

@@ -1,7 +1,7 @@
 # strata-filecat progress
 
 ## 2026-11-07: created
-Extracted from the `exports-catalog` script that was written the same day for the Google Takeout on the omarchy box (3+ TiB with the same file in several zips, nested earlier exports and several versions per path). First as `exports-catalog` for one collection, then generalised in a few hours into collections + roots + profiles in one DB, so that duplicates can be found across services.
+Extracted from the `exports-catalog` script that was written the same day for a Google Takeout on a home Linux box (3+ TiB with the same file in several zips, nested earlier exports and several versions per path). First as `exports-catalog` for one collection, then generalised in a few hours into collections + roots + profiles in one DB, so that duplicates can be found across services.
 
 Decisions:
 - One DB, not one per collection: the value is cross-collection duplicates.
