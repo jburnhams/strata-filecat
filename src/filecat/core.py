@@ -102,7 +102,9 @@ def hash_pending(c, seconds, only=None):
         for fid, cid, root, path, size in rows:
             if time.time() >= end: break
             base = paths.get((cid, root))
-            if base is None: c.execute("UPDATE files SET state='error' WHERE id=?", (fid,)); continue
+            if base is None:                                                      # a collection may have been added by another process since this slice started: look again before giving up
+                paths = {(i, l): p for i, l, p in c.execute('SELECT collection_id,label,path FROM roots')}; base = paths.get((cid, root))
+            if base is None: c.execute("UPDATE files SET state='error' WHERE id=?", (fid,)); c.commit(); continue
             fp = os.path.join(base, path)
             try:
                 if os.stat(fp).st_size != size: c.execute("UPDATE files SET state='size-mismatch' WHERE id=?", (fid,)); c.commit(); continue

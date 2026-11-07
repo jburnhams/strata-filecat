@@ -117,3 +117,25 @@ def test_scanned_paths_use_forward_slashes(db, tree):
     root = tree('c', {'a/b/c.txt': b'1'}); core.add_collection(db, 'c', roots=[f'r={root}']); core.scan_root(db, core.coll(db, 'c'), 'r', str(root))
     assert one(db, 'SELECT path FROM files')[0] == 'a/b/c.txt'
     assert core.hash_pending(db, 10) == 1                                    # and a '/' path resolves to the file on every OS
+
+def test_a_collection_added_while_a_hash_slice_is_running_is_hashed_not_marked_error(db, tmp_path, monkeypatch):
+    """`filecat run` hashes for up to 25 minutes; another process may register a collection and ingest rows meanwhile. The hasher must pick up the new roots."""
+    from filecat.db import connect
+    a = tmp_path / 'a'; a.mkdir(); (a / 'f1.bin').write_bytes(b'1'); b = tmp_path / 'b'; b.mkdir(); (b / 'g1.bin').write_bytes(b'22')
+    core.add_collection(db, 'first', roots=[f'r={a}']); core.scan_root(db, core.coll(db, 'first'), 'r', str(a))
+    real, calls = core.sha256_file, []
+    def slow(p):
+        calls.append(p)
+        if len(calls) == 1:                                                    # while the first file is being hashed, a second process adds a collection with rows
+            other = connect(); core.add_collection(other, 'second', roots=[f'r={b}']); core.scan_root(other, core.coll(other, 'second'), 'r', str(b)); other.close()
+        return real(p)
+    monkeypatch.setattr(core, 'sha256_file', slow)
+    assert core.hash_pending(db, 30) == 2
+    assert {r[0]: r[1] for r in db.execute('SELECT path,state FROM files')} == {'f1.bin': 'ok', 'g1.bin': 'ok'}
+    assert db.execute('SELECT COUNT(*) FROM files WHERE sha256 IS NOT NULL').fetchone()[0] == 2
+
+def test_a_row_whose_root_really_does_not_exist_is_marked_error_once_and_does_not_loop(db):
+    cid = core.add_collection(db, 'c', roots=['r=/nonexistent/x'])
+    db.execute("INSERT INTO sources(collection_id,name,kind) VALUES(?,?,?)", (cid, 's', 'scan'))
+    db.execute("INSERT INTO files(collection_id,root,path,size,source_id) VALUES(?,?,?,?,1)", (cid, 'gone-root', 'a.txt', 1)); db.commit()
+    assert core.hash_pending(db, 10) == 0 and db.execute('SELECT state FROM files').fetchone()[0] == 'error'
