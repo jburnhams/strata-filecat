@@ -1,5 +1,5 @@
 """Collections, archive indexing, incremental scans and hashing."""
-import hashlib, json, os, sys, tarfile, time, zipfile
+import hashlib, json, os, subprocess, sys, tarfile, time, zipfile
 from .profiles import load_profile
 
 def coll(c, name):
@@ -91,9 +91,15 @@ def sha256_file(p):
             h.update(b)
     return h.digest()
 
-def hash_pending(c, seconds, only=None):
-    """SHA-256 of current files on disk that have none, oldest rows first, until the time budget is spent (resumable)."""
-    end = time.time() + seconds; done = nbytes = 0
+def should_yield(stop_when, state):
+    """True when the shell command `stop_when` succeeds (exit 0), e.g. `pgrep -f 'bsdtar -xf'`: another job needs the disk. Checked at most every 2 s."""
+    if not stop_when or time.time() - state['t'] < 2: return state['y']
+    state['t'] = time.time(); state['y'] = subprocess.run(stop_when, shell=True, capture_output=True).returncode == 0; return state['y']
+
+def hash_pending(c, seconds, only=None, stop_when=None):
+    """SHA-256 of current files on disk that have none, oldest rows first, until the time budget is spent (resumable).
+    With `stop_when` (a shell command) the slice ends early whenever that command succeeds: hashing should not compete with a job that is busy on the same disk."""
+    end = time.time() + seconds; done = nbytes = 0; yst = {'t': 0.0, 'y': False}
     paths = {(cid, l): p for cid, l, p in c.execute('SELECT collection_id,label,path FROM roots')}
     q = "SELECT id,collection_id,root,path,size FROM files WHERE sha256 IS NULL AND current=1 AND state='ok'" + (' AND collection_id=%d' % coll(c, only)['id'] if only else '') + ' ORDER BY id LIMIT 200'
     while time.time() < end:
@@ -101,6 +107,7 @@ def hash_pending(c, seconds, only=None):
         if not rows: break
         for fid, cid, root, path, size in rows:
             if time.time() >= end: break
+            if should_yield(stop_when, yst): end = 0; break
             base = paths.get((cid, root))
             if base is None:                                                      # a collection may have been added by another process since this slice started: look again before giving up
                 paths = {(i, l): p for i, l, p in c.execute('SELECT collection_id,label,path FROM roots')}; base = paths.get((cid, root))
@@ -114,10 +121,11 @@ def hash_pending(c, seconds, only=None):
             except OSError as e: print('hash error', fp[:100], e, file=sys.stderr)
         c.commit()
     left = c.execute("SELECT COUNT(*),COALESCE(SUM(size),0) FROM files WHERE sha256 IS NULL AND current=1 AND state='ok'").fetchone()
+    if yst['y']: print('yielded: the stop-when command succeeded (another job is busy on the disk)')
     print(f'hashed {done} files ({nbytes/1e9:.1f} GB); still to hash: {left[0]} files ({left[1]/1e9:.1f} GB)')
     return done
 
-def run_all(c, seconds):
+def run_all(c, seconds, stop_when=None):
     """For every collection: ingest what its profile says is pending, scan autoscan roots; then hash."""
     for cid, name in c.execute('SELECT id,name FROM collections ORDER BY id').fetchall():
         cl = coll(c, name); cls = load_profile(cl['profile'])
@@ -126,4 +134,4 @@ def run_all(c, seconds):
                 if not c.execute('SELECT 1 FROM sources WHERE collection_id=? AND name=?', (cid, os.path.basename(arch))).fetchone(): ingest_archive(c, cl, arch)
         for l, (p, auto) in roots_of(c, cid).items():
             if auto: scan_root(c, cl, l, p)
-    return hash_pending(c, seconds)
+    return hash_pending(c, seconds, stop_when=stop_when)

@@ -139,3 +139,16 @@ def test_a_row_whose_root_really_does_not_exist_is_marked_error_once_and_does_no
     db.execute("INSERT INTO sources(collection_id,name,kind) VALUES(?,?,?)", (cid, 's', 'scan'))
     db.execute("INSERT INTO files(collection_id,root,path,size,source_id) VALUES(?,?,?,?,1)", (cid, 'gone-root', 'a.txt', 1)); db.commit()
     assert core.hash_pending(db, 10) == 0 and db.execute('SELECT state FROM files').fetchone()[0] == 'error'
+
+def test_hashing_yields_while_the_stop_when_command_succeeds_and_resumes_when_it_stops(db, tree):
+    root = tree('c', {'a.bin': b'1', 'b.bin': b'22'}); core.add_collection(db, 'c', roots=[f'r={root}']); core.scan_root(db, core.coll(db, 'c'), 'r', str(root))
+    assert core.hash_pending(db, 30, stop_when='true') == 0                      # `true` succeeds = "the other job is busy": nothing is hashed
+    assert db.execute('SELECT COUNT(*) FROM files WHERE sha256 IS NOT NULL').fetchone()[0] == 0
+    assert core.hash_pending(db, 30, stop_when='false') == 2                     # `false` fails = "not busy": hashes everything
+    assert core.hash_pending(db, 30, stop_when='true') == 0
+
+def test_cli_passes_stop_when(tmp_path, monkeypatch, capsys):
+    from filecat.cli import main
+    monkeypatch.setenv('FILECAT_DB', str(tmp_path / 'c.db')); d = tmp_path / 'd'; d.mkdir(); (d / 'a.txt').write_text('x')
+    main(['collection', 'add', 'x', '--root', f'r={d},autoscan']); main(['run', '--seconds', '10', '--stop-when', 'true']); assert 'yielded' in capsys.readouterr().out
+    main(['run', '--seconds', '10', '--stop-when', 'false']); assert 'hashed 1 files' in capsys.readouterr().out
