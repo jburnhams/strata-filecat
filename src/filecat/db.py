@@ -85,8 +85,11 @@ class Conn:
         return f"upper(encode(substring({col} from 1 for 6), 'hex'))" if s.dialect == 'postgresql' else f'hex(substr({col},1,6))'
 
     def as_text(s, col):
-        """Any column as comparable text (COALESCE over columns of different types needs one type)."""
-        return f"upper(encode({col}, 'hex'))" if s.dialect == 'postgresql' and col == 'sha256' else (f'hex({col})' if col == 'sha256' else f'CAST({col} AS TEXT)')
+        """Any column as comparable text (COALESCE over columns of different types needs one type). NULL stays NULL,
+        so COALESCE can fall through to the next column: SQLite's hex(NULL) is '' (not NULL), hence the CASE."""
+        if col != 'sha256': return f'CAST({col} AS TEXT)'
+        if s.dialect == 'postgresql': return f"upper(encode({col}, 'hex'))"
+        return f'CASE WHEN {col} IS NULL THEN NULL ELSE hex({col}) END'
 
 
 def _adopt_pre_alembic(engine):

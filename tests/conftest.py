@@ -16,13 +16,15 @@ def db(tmp_path, monkeypatch, request):
 
 
 def pytest_collection_modifyitems(config, items):
-    if config.getoption('--pg'):
-        for it in items:
-            if 'sqlite_only' in it.keywords: it.add_marker(pytest.mark.skip(reason='SQLite locking behaviour; not applicable on PostgreSQL'))
+    pg = config.getoption('--pg')
+    for it in items:
+        if pg and 'sqlite_only' in it.keywords: it.add_marker(pytest.mark.skip(reason='SQLite-specific; not applicable on PostgreSQL'))
+        if not pg and 'pg_only' in it.keywords: it.add_marker(pytest.mark.skip(reason='needs PostgreSQL: pytest --pg'))
 
 
 def pytest_configure(config):
-    config.addinivalue_line('markers', 'sqlite_only: tests of SQLite-specific behaviour (file locking)')
+    config.addinivalue_line('markers', 'sqlite_only: tests of SQLite-specific behaviour (file locking, adoption)')
+    config.addinivalue_line('markers', 'pg_only: tests that need PostgreSQL (pytest --pg)')
 
 @pytest.fixture
 def tree(tmp_path):

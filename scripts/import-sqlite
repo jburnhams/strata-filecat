@@ -116,7 +116,9 @@ def main():
                 s = dst.execute("SELECT pg_get_serial_sequence(%s, 'id')", (t,)).fetchone()[0]
                 if not s: continue
                 top = max(seq, dst.execute(f'SELECT coalesce(max(id), 0) FROM {q(t)}').fetchone()[0])
-                dst.execute('SELECT setval(%s, %s)', (s, top))
+                # setval(seq, 0) is out of range (sequences start at 1): an empty table gets 1 with is_called=false,
+                # so its first id is still 1
+                dst.execute('SELECT setval(%s, %s, %s)', (s, max(top, 1), top > 0))
                 print(f'sequence {t}.id -> {top}')
             if not verify(src, dst): raise VerifyFailed
     except VerifyFailed:
