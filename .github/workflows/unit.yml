@@ -28,23 +28,10 @@ jobs:
       - run: ruff check src tests
       - run: pytest
 
-  postgres:
-    # the same tests on a real PostgreSQL 18 (as on omarchy), through omarchy_db's pytest plugin (--pg)
-    runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: postgres:18
-        env:
-          POSTGRES_PASSWORD: postgres  # throwaway CI container gitleaks:allow
-        ports: ["5432:5432"]
-        options: >-
-          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 10
-    env:
-      OMARCHY_DB_TEST_ADMIN_URL: postgresql://postgres:postgres@localhost:5432/postgres  # throwaway CI container gitleaks:allow
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.13'
-      - run: pip install -r requirements-test.txt && pip install "omarchy-db @ git+https://github.com/jburnhams/database@main#subdirectory=python" && pip install -e .
-      - run: pytest --pg
+  database:
+    # migrations (dbtool check) and the same tests on a throwaway PostgreSQL 18 (as on omarchy), through the shared workflow in
+    # jburnhams/database (it also runs them on SQLite)
+    uses: jburnhams/database/.github/workflows/app-db.yml@main
+    with:
+      install: pip install -r requirements-test.txt && pip install -e .
+      tests: tests/unit
