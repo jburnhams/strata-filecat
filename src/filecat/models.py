@@ -1,6 +1,6 @@
 """The catalogue's tables as SQLAlchemy models (omarchy_db). Alembic generates the migrations from these
 (`dbtool revision -m ...` in this repo); the same tables work on SQLite (tests, other machines) and on the shared
-PostgreSQL on omarchy (schema `filecat` of the database `omarchy`).
+PostgreSQL (schema `filecat` of the configured database).
 
 Same columns as the original hand-written SQLite schema (user_version 2). Sizes, mtimes and CRC32 are BIGINT: files
 over 2 GB and unsigned 32-bit CRCs do not fit a Postgres INTEGER. Flags stay integers (current=1) so the queries

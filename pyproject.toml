@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "strata-filecat"
 version = "0.1.0"
-description = "One catalogue and SHA-256 index for many file collections (SQLite, or the shared PostgreSQL on omarchy)"
+description = "One catalogue and SHA-256 index for many file collections (SQLite or PostgreSQL)"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = ["omarchy-db>=0.1"]       # SQLAlchemy, Alembic, psycopg; github.com/jburnhams/database (python/), not on PyPI

@@ -6,7 +6,7 @@ from filecat.db import connect
 @pytest.fixture
 def db(tmp_path, monkeypatch, request):
     """A fresh catalogue, never the real one: a SQLite file in tmp_path, or with `pytest --pg` a throwaway PostgreSQL
-    database (omarchy_db's pytest plugin; the catalogue goes into its schema `filecat`, as on omarchy)."""
+    database (omarchy_db's pytest plugin; the catalogue goes into its schema `filecat`)."""
     if request.config.getoption("--pg"):
         url = request.getfixturevalue("db_url")
         monkeypatch.setenv("FILECAT_DB", url)

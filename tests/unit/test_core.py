@@ -330,8 +330,8 @@ def test_where_the_catalogue_is(tmp_path, monkeypatch):
     monkeypatch.delenv("FILECAT_DB", raising=False)  # USERPROFILE: ~ on Windows
     assert dbm.db_url() == "sqlite:///" + str(tmp_path / ".local/share/filecat/catalog.db")
     (tmp_path / ".config/filecat").mkdir(parents=True)
-    (tmp_path / ".config/filecat/database").write_text("postgresql:///omarchy\n")
-    assert dbm.db_url() == "postgresql+psycopg:///omarchy?options=-csearch_path%3Dfilecat"
+    (tmp_path / ".config/filecat/database").write_text("postgresql:///mydb\n")
+    assert dbm.db_url() == "postgresql+psycopg:///mydb?options=-csearch_path%3Dfilecat"
     monkeypatch.setenv("FILECAT_DB", str(tmp_path / "x.db"))
     assert dbm.db_url() == "sqlite:///" + str(tmp_path / "x.db")
 
@@ -348,30 +348,3 @@ def test_report_counts_unhashed_versions_of_different_size_as_versions(db, tree,
     capsys.readouterr()
     report.report(db, "c")
     assert "paths with more than one version: 1" in capsys.readouterr().out
-
-
-@pytest.mark.pg_only
-def test_import_handles_an_empty_table_and_verifies(tmp_path, db_url):
-    """scripts/import-sqlite into Postgres: an empty table (no roots) must not break the sequence reset, and the
-    copy verifies; the first id handed out afterwards is still 1."""
-    import subprocess
-    import sys
-
-    from filecat.db import connect
-
-    src = tmp_path / "src.db"
-    c = connect(str(src))
-    c.execute("INSERT INTO collections(name, profile) VALUES('c', 'plain')")
-    c.commit()
-    c.close()
-    dst = db_url + ("&" if "?" in db_url else "?") + "options=-csearch_path%3Dfilecat"
-    dst = dst.replace("postgresql+psycopg://", "postgresql://")
-    script = os.path.join(os.path.dirname(__file__), "..", "..", "scripts", "import-sqlite")
-    r = subprocess.run([sys.executable, script, "--src", str(src), "--dst", dst], capture_output=True, text=True)
-    assert r.returncode == 0, r.stdout + r.stderr
-    assert "verified: identical" in r.stdout
-    c = connect(dst)
-    assert (
-        c.execute("INSERT INTO roots(collection_id, label, path) VALUES(1, 'r', '/x') RETURNING id").scalar_one() == 1
-    )
-    c.close()

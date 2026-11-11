@@ -2,7 +2,7 @@
 
 Where: FILECAT_DB, else the first line of ~/.config/filecat/database, else ~/.local/share/filecat/catalog.db. Each is
 a SQLite path or a PostgreSQL URL. The file is how every caller agrees without its own environment (the timer, the
-Takeout inbox, a shell); on omarchy it holds postgresql:///omarchy?options=-csearch_path%3Dfilecat (schema filecat
+Takeout inbox, a shell); a PostgreSQL setup holds e.g. postgresql:///mydb?options=-csearch_path%3Dfilecat (schema filecat
 of the shared database).
 Schema: SQLAlchemy models (models.py) with Alembic migrations (migrations/), through omarchy_db; pending migrations
 are applied on connect. A SQLite catalogue from before Alembic (PRAGMA user_version 2, same tables) is adopted by

@@ -37,7 +37,7 @@ jobs:
         run: uv run --no-sync pytest --cov --cov-report=term
 
   database:
-    # migrations (dbtool check) and the same tests on a throwaway PostgreSQL 18 (as on omarchy), through the shared workflow in
+    # migrations (dbtool check) and the same tests on a throwaway PostgreSQL 18, through the shared workflow in
     # jburnhams/database (it also runs them on SQLite)
     uses: jburnhams/database/.github/workflows/app-db.yml@main
     with:
