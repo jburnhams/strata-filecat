@@ -6,6 +6,10 @@ on:
   pull_request:
     branches: [ "main" ]
 
+concurrency:
+  group: unit-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   python:
     runs-on: ${{ matrix.os }}
@@ -20,18 +24,22 @@ jobs:
           - os: windows-latest
             python-version: '3.13'
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
         with:
           python-version: ${{ matrix.python-version }}
-      - run: pip install -r requirements-test.txt && pip install "omarchy-db @ git+https://github.com/jburnhams/database@main#subdirectory=python" && pip install -e .
-      - run: ruff check src tests
-      - run: pytest
+          enable-cache: true
+      - run: uv sync --locked
+      - name: Lockfile, lint, format and types (once, on the newest Python)
+        if: matrix.python-version == '3.13' && matrix.os == 'ubuntu-latest'
+        run: uv run --no-sync strata-check --fast
+      - name: Unit tests with coverage
+        run: uv run --no-sync pytest --cov --cov-report=term
 
   database:
-    # migrations (dbtool check) and the same tests on a throwaway PostgreSQL 18 (as on omarchy), through the shared workflow in
+    # migrations (dbtool check) and the same tests on a throwaway PostgreSQL 18, through the shared workflow in
     # jburnhams/database (it also runs them on SQLite)
     uses: jburnhams/database/.github/workflows/app-db.yml@main
     with:
-      install: pip install -r requirements-test.txt && pip install -e .
+      install: uv pip install -e . --group dev
       tests: tests/unit

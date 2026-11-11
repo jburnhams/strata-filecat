@@ -32,8 +32,8 @@ where hex(f.sha256) like '41EF49%' and f.current = 1;
 
 ## Develop
 ```bash
-pip install -r requirements-test.txt && pip install -e .
-pytest            # hermetic: every test uses a temporary database
-ruff check src tests
+uv sync
+scripts/check     # the gate: lockfile, ruff, format, pyright, ty, tests with coverage (--fast skips the tests)
+uv run pytest     # hermetic: every test uses a temporary database
 ```
 See [AGENTS.md](AGENTS.md) for conventions and [docs/progress.md](docs/progress.md) for the log.

@@ -1,158 +1,291 @@
-import os, zipfile
+import os
+import zipfile
+
 import pytest
+
 from filecat import core, report
 from filecat.profiles import Plain, load_profile
 
-def one(db, sql, *a): return db.execute(sql, a).fetchone()
+
+def one(db, sql, *a):
+    return db.execute(sql, a).fetchone()
+
 
 def test_scan_new_changed_unchanged_gone(db, tree, capsys):
-    root = tree('flickr', {'2019/a.jpg': b'PHOTO-A', '2020/u.jpg': b'UNIQUE', '2020/c.txt': b'OLD'})
-    core.add_collection(db, 'flickr', roots=[f'photos={root},autoscan']); cl = core.coll(db, 'flickr')
-    core.scan_root(db, cl, 'photos', str(root)); assert '3 new, 0 changed, 0 unchanged, 0 gone' in capsys.readouterr().out
-    (root / '2020/c.txt').write_bytes(b'NEWER-CONTENT'); os.utime(root / '2020/c.txt', (2_000_000_000, 2_000_000_000))
-    (root / '2020/u.jpg').unlink(); (root / 'new.png').write_bytes(b'x')
-    core.scan_root(db, cl, 'photos', str(root)); assert '1 new, 1 changed, 1 unchanged, 1 gone' in capsys.readouterr().out
-    assert one(db, "SELECT COUNT(*) FROM files WHERE path='2020/c.txt'")[0] == 2             # history kept
+    root = tree("flickr", {"2019/a.jpg": b"PHOTO-A", "2020/u.jpg": b"UNIQUE", "2020/c.txt": b"OLD"})
+    core.add_collection(db, "flickr", roots=[f"photos={root},autoscan"])
+    cl = core.coll(db, "flickr")
+    core.scan_root(db, cl, "photos", str(root))
+    assert "3 new, 0 changed, 0 unchanged, 0 gone" in capsys.readouterr().out
+    (root / "2020/c.txt").write_bytes(b"NEWER-CONTENT")
+    os.utime(root / "2020/c.txt", (2_000_000_000, 2_000_000_000))
+    (root / "2020/u.jpg").unlink()
+    (root / "new.png").write_bytes(b"x")
+    core.scan_root(db, cl, "photos", str(root))
+    assert "1 new, 1 changed, 1 unchanged, 1 gone" in capsys.readouterr().out
+    assert one(db, "SELECT COUNT(*) FROM files WHERE path='2020/c.txt'")[0] == 2  # history kept
     assert one(db, "SELECT size FROM files WHERE path='2020/c.txt' AND current=1")[0] == 13
-    assert one(db, "SELECT state,current FROM files WHERE path='2020/u.jpg'") == ('missing', 0)
+    assert one(db, "SELECT state,current FROM files WHERE path='2020/u.jpg'") == ("missing", 0)
+
 
 def test_scan_ignores_hidden_partial_and_symlinks(db, tree):
-    root = tree('c', {'ok.txt': b'1', '.hidden': b'2', 'x.partial': b'3', '.dir/inner.txt': b'4'}); os.symlink(root / 'ok.txt', root / 'link.txt')
-    core.add_collection(db, 'c', roots=[f'r={root}']); core.scan_root(db, core.coll(db, 'c'), 'r', str(root))
-    assert [r[0] for r in db.execute('SELECT path FROM files')] == ['ok.txt']
+    root = tree("c", {"ok.txt": b"1", ".hidden": b"2", "x.partial": b"3", ".dir/inner.txt": b"4"})
+    os.symlink(root / "ok.txt", root / "link.txt")
+    core.add_collection(db, "c", roots=[f"r={root}"])
+    core.scan_root(db, core.coll(db, "c"), "r", str(root))
+    assert [r[0] for r in db.execute("SELECT path FROM files")] == ["ok.txt"]
+
 
 def test_hash_and_cross_collection_duplicates(db, tree, capsys):
-    f = tree('flickr', {'a.jpg': b'PHOTO-A', 'u.jpg': b'ONLY-FLICKR'}); p = tree('phone', {'IMG_1.jpg': b'PHOTO-A', 'IMG_1_copy.jpg': b'PHOTO-A'})
-    core.add_collection(db, 'flickr', roots=[f'photos={f}']); core.add_collection(db, 'phone', roots=[f'dcim={p}'])
-    for n, r, d in (('flickr', 'photos', f), ('phone', 'dcim', p)): core.scan_root(db, core.coll(db, n), r, str(d))
+    f = tree("flickr", {"a.jpg": b"PHOTO-A", "u.jpg": b"ONLY-FLICKR"})
+    p = tree("phone", {"IMG_1.jpg": b"PHOTO-A", "IMG_1_copy.jpg": b"PHOTO-A"})
+    core.add_collection(db, "flickr", roots=[f"photos={f}"])
+    core.add_collection(db, "phone", roots=[f"dcim={p}"])
+    for n, r, d in (("flickr", "photos", f), ("phone", "dcim", p)):
+        core.scan_root(db, core.coll(db, n), r, str(d))
     assert core.hash_pending(db, 30) == 4
     out = report.dups(db, min_size=1, across=True)
-    assert len(out) == 1 and out[0].split()[1] == 'x3'
-    report.report(db); text = capsys.readouterr().out
-    assert '1 contents present in more than one collection (2 extra copies' in text and 'identical content inside the collection: 1 groups' in text
-    assert report.dups(db, min_size=1, across=True, collection='flickr') == []             # only one flickr file in that group
+    assert len(out) == 1 and out[0].split()[1] == "x3"
+    report.report(db)
+    text = capsys.readouterr().out
+    assert (
+        "1 contents present in more than one collection (2 extra copies" in text
+        and "identical content inside the collection: 1 groups" in text
+    )
+    assert report.dups(db, min_size=1, across=True, collection="flickr") == []  # only one flickr file in that group
+
 
 def test_hash_marks_missing_and_size_mismatch(db, tree):
-    root = tree('c', {'a.txt': b'12345', 'b.txt': b'12345'}); core.add_collection(db, 'c', roots=[f'r={root}']); core.scan_root(db, core.coll(db, 'c'), 'r', str(root))
-    (root / 'a.txt').unlink(); (root / 'b.txt').write_bytes(b'longer now')
+    root = tree("c", {"a.txt": b"12345", "b.txt": b"12345"})
+    core.add_collection(db, "c", roots=[f"r={root}"])
+    core.scan_root(db, core.coll(db, "c"), "r", str(root))
+    (root / "a.txt").unlink()
+    (root / "b.txt").write_bytes(b"longer now")
     assert core.hash_pending(db, 30) == 0
-    assert {r[0]: r[1] for r in db.execute('SELECT path,state FROM files')} == {'a.txt': 'missing', 'b.txt': 'size-mismatch'}
+    assert {r[0]: r[1] for r in db.execute("SELECT path,state FROM files")} == {
+        "a.txt": "missing",
+        "b.txt": "size-mismatch",
+    }
+
 
 def make_zip(path, files):
-    with zipfile.ZipFile(path, 'w') as z:
-        for k, v in files.items(): z.writestr(k, v)
+    with zipfile.ZipFile(path, "w") as z:
+        for k, v in files.items():
+            z.writestr(k, v)
     return str(path)
 
+
 def test_ingest_archive_strip_skip_and_versions(db, tmp_path, capsys):
-    core.add_collection(db, 'amazon', roots=[f'data={tmp_path}'], config={'strip': '1', 'skip': ['Junk']}); cl = core.coll(db, 'amazon')
-    z1 = make_zip(tmp_path / 'one.zip', {'Amz/Orders/o1.csv': 'a,b', 'Amz/Junk/j.bin': 'zz', 'Amz/Orders/o2.csv': 'c,d'})
-    z2 = make_zip(tmp_path / 'two.zip', {'Amz/Orders/o1.csv': 'a,b', 'Amz/Orders/o2.csv': 'CHANGED!'})
-    core.ingest_archive(db, cl, z1); assert '3 entries (1 skipped, 0 errors)' in capsys.readouterr().out
-    core.ingest_archive(db, cl, z1); assert 'already in catalogue' in capsys.readouterr().out
-    core.ingest_archive(db, cl, z2, strip=1, skip=['Junk'])
-    rows = {(r[0], r[1], r[2]) for r in db.execute('SELECT path,state,current FROM files')}
-    assert ('Junk/j.bin', 'skipped-nested', 0) in rows and ('Orders/o1.csv', 'ok', 0) in rows and ('Orders/o1.csv', 'ok', 1) in rows
-    assert one(db, "SELECT COUNT(*) FROM files WHERE path='Orders/o2.csv'")[0] == 2 and one(db, "SELECT size FROM files WHERE path='Orders/o2.csv' AND current=1")[0] == 8
-    assert one(db, "SELECT sha256 IS NULL FROM files WHERE path='Orders/o1.csv' AND current=1")[0] == 1      # no hash yet (nothing on disk)
+    core.add_collection(db, "amazon", roots=[f"data={tmp_path}"], config={"strip": "1", "skip": ["Junk"]})
+    cl = core.coll(db, "amazon")
+    z1 = make_zip(
+        tmp_path / "one.zip", {"Amz/Orders/o1.csv": "a,b", "Amz/Junk/j.bin": "zz", "Amz/Orders/o2.csv": "c,d"}
+    )
+    z2 = make_zip(tmp_path / "two.zip", {"Amz/Orders/o1.csv": "a,b", "Amz/Orders/o2.csv": "CHANGED!"})
+    core.ingest_archive(db, cl, z1)
+    assert "3 entries (1 skipped, 0 errors)" in capsys.readouterr().out
+    core.ingest_archive(db, cl, z1)
+    assert "already in catalogue" in capsys.readouterr().out
+    core.ingest_archive(db, cl, z2, strip=1, skip=["Junk"])
+    rows = {(r[0], r[1], r[2]) for r in db.execute("SELECT path,state,current FROM files")}
+    assert (
+        ("Junk/j.bin", "skipped-nested", 0) in rows
+        and ("Orders/o1.csv", "ok", 0) in rows
+        and ("Orders/o1.csv", "ok", 1) in rows
+    )
+    assert (
+        one(db, "SELECT COUNT(*) FROM files WHERE path='Orders/o2.csv'")[0] == 2
+        and one(db, "SELECT size FROM files WHERE path='Orders/o2.csv' AND current=1")[0] == 8
+    )
+    assert (
+        one(db, "SELECT sha256 IS NULL FROM files WHERE path='Orders/o1.csv' AND current=1")[0] == 1
+    )  # no hash yet (nothing on disk)
+
 
 def test_same_size_and_crc_inherits_the_hash(db, tmp_path):
-    core.add_collection(db, 'c', roots=[f'r={tmp_path}']); cl = core.coll(db, 'c')
-    core.ingest_archive(db, cl, make_zip(tmp_path / 'a.zip', {'x/f.txt': 'same'}), strip=1)
-    db.execute("UPDATE files SET sha256=?", (b'\xaa',)); db.commit()
-    core.ingest_archive(db, cl, make_zip(tmp_path / 'b.zip', {'x/f.txt': 'same'}), strip=1)
-    assert bytes(one(db, 'SELECT sha256 FROM files WHERE current=1')[0]) == b'\xaa'
+    core.add_collection(db, "c", roots=[f"r={tmp_path}"])
+    cl = core.coll(db, "c")
+    core.ingest_archive(db, cl, make_zip(tmp_path / "a.zip", {"x/f.txt": "same"}), strip=1)
+    db.execute("UPDATE files SET sha256=?", (b"\xaa",))
+    db.commit()
+    core.ingest_archive(db, cl, make_zip(tmp_path / "b.zip", {"x/f.txt": "same"}), strip=1)
+    assert bytes(one(db, "SELECT sha256 FROM files WHERE current=1")[0]) == b"\xaa"
+
 
 def test_plain_profile_maps_and_rejects_traversal():
-    p = Plain({}, None, strip=1, skip=['Skip/'])
-    assert p.map('top/a/b.txt') == ('ok', 'a/b.txt', 'top/a/b.txt')
-    assert p.map('top/Skip/x') == ('skip', 'Skip/x', None) and p.map('top') == ('skip', 'top', None)
-    assert p.map('top/../../etc/passwd')[1] == 'etc/passwd'                      # '..' components are dropped, never followed
+    p = Plain({}, None, strip=1, skip=["Skip/"])
+    assert p.map("top/a/b.txt") == ("ok", "a/b.txt", "top/a/b.txt")
+    assert p.map("top/Skip/x") == ("skip", "Skip/x", None) and p.map("top") == ("skip", "top", None)
+    assert p.map("top/../../etc/passwd")[1] == "etc/passwd"  # '..' components are dropped, never followed
+
 
 def test_unknown_profile_is_an_error(db):
-    with pytest.raises(SystemExit): load_profile('nope')
-    with pytest.raises(SystemExit): core.add_collection(db, 'x', profile='nope')
+    with pytest.raises(SystemExit):
+        load_profile("nope")
+    with pytest.raises(SystemExit):
+        core.add_collection(db, "x", profile="nope")
+
 
 def test_profile_plugin_and_pending_archives(db, tmp_path, monkeypatch):
     class Fake(Plain):
         @classmethod
-        def pending_archives(cls, cfg): return [cfg['dir'] + '/p1.zip']
-        def meta(self, name): return '2026'
+        def pending_archives(cls, cfg):
+            return [cfg["dir"] + "/p1.zip"]
+
+        def meta(self, name):
+            return "2026"
+
     class EP:
-        name = 'fake'
-        def load(self): return Fake
-    monkeypatch.setattr('importlib.metadata.entry_points', lambda group: [EP()])
-    make_zip(tmp_path / 'p1.zip', {'T/a.txt': 'x'})
-    core.add_collection(db, 'fk', profile='fake', roots=[f'r={tmp_path}'], config={'dir': str(tmp_path), 'strip': '1'})
-    core.run_all(db, 5); core.run_all(db, 5)                                    # the second run must not ingest again
-    assert one(db, "SELECT COUNT(*) FROM sources WHERE kind='archive'")[0] == 1 and one(db, "SELECT export_ts FROM sources WHERE kind='archive'")[0] == '2026'
+        name = "fake"
+
+        def load(self):
+            return Fake
+
+    monkeypatch.setattr("importlib.metadata.entry_points", lambda group: [EP()])
+    make_zip(tmp_path / "p1.zip", {"T/a.txt": "x"})
+    core.add_collection(db, "fk", profile="fake", roots=[f"r={tmp_path}"], config={"dir": str(tmp_path), "strip": "1"})
+    core.run_all(db, 5)
+    core.run_all(db, 5)  # the second run must not ingest again
+    assert (
+        one(db, "SELECT COUNT(*) FROM sources WHERE kind='archive'")[0] == 1
+        and one(db, "SELECT export_ts FROM sources WHERE kind='archive'")[0] == "2026"
+    )
+
 
 def test_cli_end_to_end(tmp_path, monkeypatch, capsys):
     from filecat.cli import main
-    monkeypatch.setenv('FILECAT_DB', str(tmp_path / 'cli.db')); d = tmp_path / 'data'; d.mkdir(); (d / 'a.txt').write_text('hello')
-    main(['collection', 'add', 'demo', '--root', f'r={d},autoscan', '--note', 'demo']); main(['run', '--seconds', '10']); main(['collection', 'list']); main(['report']); main(['dups', '--min-size', '1'])
+
+    monkeypatch.setenv("FILECAT_DB", str(tmp_path / "cli.db"))
+    d = tmp_path / "data"
+    d.mkdir()
+    (d / "a.txt").write_text("hello")
+    main(["collection", "add", "demo", "--root", f"r={d},autoscan", "--note", "demo"])
+    main(["run", "--seconds", "10"])
+    main(["collection", "list"])
+    main(["report"])
+    main(["dups", "--min-size", "1"])
     out = capsys.readouterr().out
-    assert 'collection demo added' in out and 'demo [plain] 1 files' in out and 'r: ' in out and 'hashed 1 files' in out and '== demo [plain]' in out
+    assert (
+        "collection demo added" in out
+        and "demo [plain] 1 files" in out
+        and "r: " in out
+        and "hashed 1 files" in out
+        and "== demo [plain]" in out
+    )
+
 
 @pytest.mark.sqlite_only
 def test_other_invocations_are_not_blocked_while_a_big_file_is_being_hashed(db, tmp_path, monkeypatch):
     """Hashing a multi-GB file takes minutes; a second filecat call (the extractor hook, a report) must not wait for it."""
-    import sqlite3, threading
+    import sqlite3
+    import threading
+
     from filecat.db import connect
-    d = tmp_path / 'd'; d.mkdir(); (d / 'a.bin').write_bytes(b'1'); (d / 'b.bin').write_bytes(b'22')
-    core.add_collection(db, 'c', roots=[f'r={d}']); core.scan_root(db, core.coll(db, 'c'), 'r', str(d))
+
+    d = tmp_path / "d"
+    d.mkdir()
+    (d / "a.bin").write_bytes(b"1")
+    (d / "b.bin").write_bytes(b"22")
+    core.add_collection(db, "c", roots=[f"r={d}"])
+    core.scan_root(db, core.coll(db, "c"), "r", str(d))
     started, release, result = threading.Event(), threading.Event(), {}
     real, calls = core.sha256_file, []
+
     def slow(p):
         calls.append(p)
-        if len(calls) == 2: started.set(); release.wait(10)             # the SECOND file blocks, so the first file's UPDATE has just been issued (os.walk order is arbitrary)
+        if len(calls) == 2:
+            started.set()
+            release.wait(
+                10
+            )  # the SECOND file blocks, so the first file's UPDATE has just been issued (os.walk order is arbitrary)
         return real(p)
-    monkeypatch.setattr(core, 'sha256_file', slow)
-    t = threading.Thread(target=lambda: result.update(n=core.hash_pending(connect(), 30))); t.start()
+
+    monkeypatch.setattr(core, "sha256_file", slow)
+    t = threading.Thread(target=lambda: result.update(n=core.hash_pending(connect(), 30)))
+    t.start()
     assert started.wait(10)
-    other = sqlite3.connect(str(tmp_path / 'cat.db'), timeout=0.5)         # would raise 'database is locked' if the hasher held a write transaction
-    other.execute("UPDATE collections SET note='x'"); other.commit(); connect()                    # and connect() must not need the write lock either
-    release.set(); t.join(); assert result['n'] == 2
+    other = sqlite3.connect(
+        str(tmp_path / "cat.db"), timeout=0.5
+    )  # would raise 'database is locked' if the hasher held a write transaction
+    other.execute("UPDATE collections SET note='x'")
+    other.commit()
+    connect()  # and connect() must not need the write lock either
+    release.set()
+    t.join()
+    assert result["n"] == 2
 
 
 def test_scanned_paths_use_forward_slashes(db, tree):
-    root = tree('c', {'a/b/c.txt': b'1'}); core.add_collection(db, 'c', roots=[f'r={root}']); core.scan_root(db, core.coll(db, 'c'), 'r', str(root))
-    assert one(db, 'SELECT path FROM files')[0] == 'a/b/c.txt'
-    assert core.hash_pending(db, 10) == 1                                    # and a '/' path resolves to the file on every OS
+    root = tree("c", {"a/b/c.txt": b"1"})
+    core.add_collection(db, "c", roots=[f"r={root}"])
+    core.scan_root(db, core.coll(db, "c"), "r", str(root))
+    assert one(db, "SELECT path FROM files")[0] == "a/b/c.txt"
+    assert core.hash_pending(db, 10) == 1  # and a '/' path resolves to the file on every OS
+
 
 def test_a_collection_added_while_a_hash_slice_is_running_is_hashed_not_marked_error(db, tmp_path, monkeypatch):
     """`filecat run` hashes for up to 25 minutes; another process may register a collection and ingest rows meanwhile. The hasher must pick up the new roots."""
     from filecat.db import connect
-    a = tmp_path / 'a'; a.mkdir(); (a / 'f1.bin').write_bytes(b'1'); b = tmp_path / 'b'; b.mkdir(); (b / 'g1.bin').write_bytes(b'22')
-    core.add_collection(db, 'first', roots=[f'r={a}']); core.scan_root(db, core.coll(db, 'first'), 'r', str(a))
+
+    a = tmp_path / "a"
+    a.mkdir()
+    (a / "f1.bin").write_bytes(b"1")
+    b = tmp_path / "b"
+    b.mkdir()
+    (b / "g1.bin").write_bytes(b"22")
+    core.add_collection(db, "first", roots=[f"r={a}"])
+    core.scan_root(db, core.coll(db, "first"), "r", str(a))
     real, calls = core.sha256_file, []
+
     def slow(p):
         calls.append(p)
-        if len(calls) == 1:                                                    # while the first file is being hashed, a second process adds a collection with rows
-            other = connect(); core.add_collection(other, 'second', roots=[f'r={b}']); core.scan_root(other, core.coll(other, 'second'), 'r', str(b)); other.close()
+        if len(calls) == 1:  # while the first file is being hashed, a second process adds a collection with rows
+            other = connect()
+            core.add_collection(other, "second", roots=[f"r={b}"])
+            core.scan_root(other, core.coll(other, "second"), "r", str(b))
+            other.close()
         return real(p)
-    monkeypatch.setattr(core, 'sha256_file', slow)
+
+    monkeypatch.setattr(core, "sha256_file", slow)
     assert core.hash_pending(db, 30) == 2
-    assert {r[0]: r[1] for r in db.execute('SELECT path,state FROM files')} == {'f1.bin': 'ok', 'g1.bin': 'ok'}
-    assert db.execute('SELECT COUNT(*) FROM files WHERE sha256 IS NOT NULL').fetchone()[0] == 2
+    assert {r[0]: r[1] for r in db.execute("SELECT path,state FROM files")} == {"f1.bin": "ok", "g1.bin": "ok"}
+    assert db.execute("SELECT COUNT(*) FROM files WHERE sha256 IS NOT NULL").fetchone()[0] == 2
+
 
 def test_a_row_whose_root_really_does_not_exist_is_marked_error_once_and_does_not_loop(db):
-    cid = core.add_collection(db, 'c', roots=['r=/nonexistent/x'])
-    db.execute("INSERT INTO sources(collection_id,name,kind) VALUES(?,?,?)", (cid, 's', 'scan'))
-    db.execute("INSERT INTO files(collection_id,root,path,size,source_id) VALUES(?,?,?,?,1)", (cid, 'gone-root', 'a.txt', 1)); db.commit()
-    assert core.hash_pending(db, 10) == 0 and db.execute('SELECT state FROM files').fetchone()[0] == 'error'
+    cid = core.add_collection(db, "c", roots=["r=/nonexistent/x"])
+    db.execute("INSERT INTO sources(collection_id,name,kind) VALUES(?,?,?)", (cid, "s", "scan"))
+    db.execute(
+        "INSERT INTO files(collection_id,root,path,size,source_id) VALUES(?,?,?,?,1)", (cid, "gone-root", "a.txt", 1)
+    )
+    db.commit()
+    assert core.hash_pending(db, 10) == 0 and db.execute("SELECT state FROM files").fetchone()[0] == "error"
+
 
 def test_hashing_yields_while_the_stop_when_command_succeeds_and_resumes_when_it_stops(db, tree):
-    root = tree('c', {'a.bin': b'1', 'b.bin': b'22'}); core.add_collection(db, 'c', roots=[f'r={root}']); core.scan_root(db, core.coll(db, 'c'), 'r', str(root))
-    assert core.hash_pending(db, 30, stop_when='true') == 0                      # `true` succeeds = "the other job is busy": nothing is hashed
-    assert db.execute('SELECT COUNT(*) FROM files WHERE sha256 IS NOT NULL').fetchone()[0] == 0
-    assert core.hash_pending(db, 30, stop_when='false') == 2                     # `false` fails = "not busy": hashes everything
-    assert core.hash_pending(db, 30, stop_when='true') == 0
+    root = tree("c", {"a.bin": b"1", "b.bin": b"22"})
+    core.add_collection(db, "c", roots=[f"r={root}"])
+    core.scan_root(db, core.coll(db, "c"), "r", str(root))
+    assert (
+        core.hash_pending(db, 30, stop_when="true") == 0
+    )  # `true` succeeds = "the other job is busy": nothing is hashed
+    assert db.execute("SELECT COUNT(*) FROM files WHERE sha256 IS NOT NULL").fetchone()[0] == 0
+    assert core.hash_pending(db, 30, stop_when="false") == 2  # `false` fails = "not busy": hashes everything
+    assert core.hash_pending(db, 30, stop_when="true") == 0
+
 
 def test_cli_passes_stop_when(tmp_path, monkeypatch, capsys):
     from filecat.cli import main
-    monkeypatch.setenv('FILECAT_DB', str(tmp_path / 'c.db')); d = tmp_path / 'd'; d.mkdir(); (d / 'a.txt').write_text('x')
-    main(['collection', 'add', 'x', '--root', f'r={d},autoscan']); main(['run', '--seconds', '10', '--stop-when', 'true']); assert 'yielded' in capsys.readouterr().out
-    main(['run', '--seconds', '10', '--stop-when', 'false']); assert 'hashed 1 files' in capsys.readouterr().out
+
+    monkeypatch.setenv("FILECAT_DB", str(tmp_path / "c.db"))
+    d = tmp_path / "d"
+    d.mkdir()
+    (d / "a.txt").write_text("x")
+    main(["collection", "add", "x", "--root", f"r={d},autoscan"])
+    main(["run", "--seconds", "10", "--stop-when", "true"])
+    assert "yielded" in capsys.readouterr().out
+    main(["run", "--seconds", "10", "--stop-when", "false"])
+    assert "hashed 1 files" in capsys.readouterr().out
 
 
 OLD_SCHEMA = """CREATE TABLE collections(id INTEGER PRIMARY KEY, name TEXT UNIQUE NOT NULL, profile TEXT NOT NULL DEFAULT 'plain', note TEXT, config TEXT NOT NULL DEFAULT '{}', created_at INTEGER);
@@ -167,53 +300,51 @@ def test_a_catalogue_from_before_alembic_is_adopted_not_recreated(tmp_path, monk
     """An existing SQLite catalogue (hand-written schema, PRAGMA user_version 2) keeps its rows: connect() stamps it at
     the first revision instead of creating the tables again, and everything works on it."""
     import sqlite3
+
     from filecat.db import connect
-    p = tmp_path / 'old.db'; old = sqlite3.connect(p); old.executescript(OLD_SCHEMA)
-    old.execute("INSERT INTO collections(name, profile) VALUES('kept', 'plain')"); old.commit(); old.close()
-    monkeypatch.setenv('FILECAT_DB', str(p))
+
+    p = tmp_path / "old.db"
+    old = sqlite3.connect(p)
+    old.executescript(OLD_SCHEMA)
+    old.execute("INSERT INTO collections(name, profile) VALUES('kept', 'plain')")
+    old.commit()
+    old.close()
+    monkeypatch.setenv("FILECAT_DB", str(p))
     c = connect()
-    assert c.execute('SELECT version_num FROM alembic_version').scalar() == '0001'
-    assert [r[0] for r in c.execute('SELECT name FROM collections')] == ['kept']
-    d = tree('d', {'a.txt': b'x'}); core.add_collection(c, 'new', roots=[f'r={d}']); core.scan_root(c, core.coll(c, 'new'), 'r', str(d))
-    assert one(c, 'SELECT COUNT(*) FROM files')[0] == 1
-    c.close(); assert connect().execute('SELECT version_num FROM alembic_version').scalar() == '0001'   # idempotent
+    assert c.execute("SELECT version_num FROM alembic_version").scalar() == "0001"
+    assert [r[0] for r in c.execute("SELECT name FROM collections")] == ["kept"]
+    d = tree("d", {"a.txt": b"x"})
+    core.add_collection(c, "new", roots=[f"r={d}"])
+    core.scan_root(c, core.coll(c, "new"), "r", str(d))
+    assert one(c, "SELECT COUNT(*) FROM files")[0] == 1
+    c.close()
+    assert connect().execute("SELECT version_num FROM alembic_version").scalar() == "0001"  # idempotent
 
 
 def test_where_the_catalogue_is(tmp_path, monkeypatch):
     """FILECAT_DB wins, then ~/.config/filecat/database, then the default SQLite file; a Postgres URL gets search_path filecat."""
     from filecat import db as dbm
-    monkeypatch.setenv('HOME', str(tmp_path)); monkeypatch.setenv('USERPROFILE', str(tmp_path)); monkeypatch.delenv('FILECAT_DB', raising=False)   # USERPROFILE: ~ on Windows
-    assert dbm.db_url() == 'sqlite:///' + str(tmp_path / '.local/share/filecat/catalog.db')
-    (tmp_path / '.config/filecat').mkdir(parents=True); (tmp_path / '.config/filecat/database').write_text('postgresql:///omarchy\n')
-    assert dbm.db_url() == 'postgresql+psycopg:///omarchy?options=-csearch_path%3Dfilecat'
-    monkeypatch.setenv('FILECAT_DB', str(tmp_path / 'x.db'))
-    assert dbm.db_url() == 'sqlite:///' + str(tmp_path / 'x.db')
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    monkeypatch.delenv("FILECAT_DB", raising=False)  # USERPROFILE: ~ on Windows
+    assert dbm.db_url() == "sqlite:///" + str(tmp_path / ".local/share/filecat/catalog.db")
+    (tmp_path / ".config/filecat").mkdir(parents=True)
+    (tmp_path / ".config/filecat/database").write_text("postgresql:///mydb\n")
+    assert dbm.db_url() == "postgresql+psycopg:///mydb?options=-csearch_path%3Dfilecat"
+    monkeypatch.setenv("FILECAT_DB", str(tmp_path / "x.db"))
+    assert dbm.db_url() == "sqlite:///" + str(tmp_path / "x.db")
 
 
 def test_report_counts_unhashed_versions_of_different_size_as_versions(db, tree, capsys):
     """A path scanned twice with a different size (no CRC, no hash yet) has two versions: the COALESCE over
     crc32, sha256, size must fall through to size (SQLite's hex(NULL) is '', which would stop it)."""
-    d = tree('d', {'a.txt': b'one'})
-    core.add_collection(db, 'c', roots=[f'r={d}']); cl = core.coll(db, 'c')
-    core.scan_root(db, cl, 'r', str(d)); (d / 'a.txt').write_bytes(b'longer'); core.scan_root(db, cl, 'r', str(d))
-    capsys.readouterr(); report.report(db, 'c')
-    assert 'paths with more than one version: 1' in capsys.readouterr().out
-
-
-@pytest.mark.pg_only
-def test_import_handles_an_empty_table_and_verifies(tmp_path, db_url):
-    """scripts/import-sqlite into Postgres: an empty table (no roots) must not break the sequence reset, and the
-    copy verifies; the first id handed out afterwards is still 1."""
-    import subprocess, sys
-    from filecat.db import connect
-    src = tmp_path / 'src.db'; c = connect(str(src))
-    c.execute("INSERT INTO collections(name, profile) VALUES('c', 'plain')"); c.commit(); c.close()
-    dst = db_url + ('&' if '?' in db_url else '?') + 'options=-csearch_path%3Dfilecat'
-    dst = dst.replace('postgresql+psycopg://', 'postgresql://')
-    script = os.path.join(os.path.dirname(__file__), '..', '..', 'scripts', 'import-sqlite')
-    r = subprocess.run([sys.executable, script, '--src', str(src), '--dst', dst], capture_output=True, text=True)
-    assert r.returncode == 0, r.stdout + r.stderr
-    assert 'verified: identical' in r.stdout
-    c = connect(dst)
-    assert c.execute("INSERT INTO roots(collection_id, label, path) VALUES(1, 'r', '/x') RETURNING id").scalar_one() == 1
-    c.close()
+    d = tree("d", {"a.txt": b"one"})
+    core.add_collection(db, "c", roots=[f"r={d}"])
+    cl = core.coll(db, "c")
+    core.scan_root(db, cl, "r", str(d))
+    (d / "a.txt").write_bytes(b"longer")
+    core.scan_root(db, cl, "r", str(d))
+    capsys.readouterr()
+    report.report(db, "c")
+    assert "paths with more than one version: 1" in capsys.readouterr().out

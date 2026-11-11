@@ -1,15 +1,15 @@
 """The catalogue's tables as SQLAlchemy models (omarchy_db). Alembic generates the migrations from these
 (`dbtool revision -m ...` in this repo); the same tables work on SQLite (tests, other machines) and on the shared
-PostgreSQL on omarchy (schema `filecat` of the database `omarchy`).
+PostgreSQL (schema `filecat` of the configured database).
 
 Same columns as the original hand-written SQLite schema (user_version 2). Sizes, mtimes and CRC32 are BIGINT: files
 over 2 GB and unsigned 32-bit CRCs do not fit a Postgres INTEGER. Flags stay integers (current=1) so the queries
 read the same on both engines.
 """
-from sqlalchemy import BigInteger, ForeignKey, Index, Integer, LargeBinary, String, UniqueConstraint, text
-from sqlalchemy.orm import Mapped, mapped_column
 
 from omarchy_db import make_base
+from sqlalchemy import BigInteger, ForeignKey, Index, Integer, LargeBinary, String, UniqueConstraint, text
+from sqlalchemy.orm import Mapped, mapped_column
 
 Base = make_base()
 
@@ -56,8 +56,12 @@ class File(Base):
     __table_args__ = (
         Index("files_path", "collection_id", "root", "path", "current"),
         Index("files_sizecrc", "size", "crc32", sqlite_where=text("current = 1"), postgresql_where=text("current = 1")),
-        Index("files_sha", "sha256", sqlite_where=text("sha256 IS NOT NULL AND current = 1"),
-              postgresql_where=text("sha256 IS NOT NULL AND current = 1")),
+        Index(
+            "files_sha",
+            "sha256",
+            sqlite_where=text("sha256 IS NOT NULL AND current = 1"),
+            postgresql_where=text("sha256 IS NOT NULL AND current = 1"),
+        ),
         Index("files_pending", "id", sqlite_where=PENDING, postgresql_where=PENDING),
     )
     id: Mapped[int] = mapped_column(primary_key=True, init=False)
