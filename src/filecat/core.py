@@ -267,7 +267,7 @@ def hash_pending(c, seconds, only=None, stop_when=None):
     return done
 
 
-def run_all(c, seconds, stop_when=None):
+def run_all(c, seconds, stop_when=None, workers=2):
     """For every collection: ingest what its profile says is pending, scan autoscan roots; then hash."""
     for cid, name in c.execute("SELECT id,name FROM collections ORDER BY id").fetchall():
         cl = coll(c, name)
@@ -285,5 +285,5 @@ def run_all(c, seconds, stop_when=None):
     from . import visual
 
     if visual.available():  # optional extra: without Pillow the SHA-256 run is unchanged
-        visual.hash_pending(c, seconds, stop_when=stop_when)
+        visual.hash_pending(c, seconds, stop_when=stop_when, workers=workers)
     return n

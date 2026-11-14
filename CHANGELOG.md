@@ -2,6 +2,14 @@
 
 Newest first, grouped by day. One entry per change, in the same commit or PR as the change.
 
+## 2026-11-14 (later)
+
+**Visual hashes: reuse and workers (branch `visual-hash-reuse-workers`).** The first full run over a real photo library would decode every file row, including every byte-identical copy.
+
+- `visual.py`: a file with the same SHA-256 as one already hashed copies that row instead of decoding again (also between files of one batch). Decoding runs in `--workers` processes (default 2, niced by 10, spawn context); only the parent process touches the database. `--workers 1` stays in-process.
+- `cli.py`: `--workers` on `visual-hash` and `run`. The output reports how many hashes were reused.
+- Tests: reuse across and within a batch, pool results equal in-process results.
+
 ## 2026-11-14
 
 **Perceptual hashes of image files (branch `visual-hash`).** To find the same picture across different files (resized, recompressed, another format) and visually similar ones, e.g. to attach metadata from one export to your own copy of a photo.
