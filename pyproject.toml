@@ -13,6 +13,12 @@ dependencies = ["omarchy-db>=0.1"]       # SQLAlchemy, Alembic, psycopg; github.
 [project.scripts]
 filecat = "filecat.cli:main"
 
+[project.optional-dependencies]
+visual = [
+    "pillow>=10",
+    "pillow-heif>=0.18",
+]
+
 [dependency-groups]
 dev = [
     "pytest>=8",
@@ -25,6 +31,8 @@ dev = [
     "pyright",
     "ty",
     "strata-python",     # only for its strata-check gate (scripts/check); the app itself needs nothing from it
+    "pillow>=10",
+    "pillow-heif>=0.18",
 ]
 
 [tool.uv]

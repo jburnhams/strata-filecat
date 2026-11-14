@@ -2,7 +2,7 @@
 
 import argparse
 
-from . import core, report
+from . import core, report, visual
 from .db import connect
 
 
@@ -33,6 +33,14 @@ def build_parser():
     x.add_argument("--seconds", type=int, default=1500)
     x.add_argument("--collection")
     x.add_argument("--stop-when", help='shell command; hashing stops while it succeeds (e.g. "pgrep -f bsdtar")')
+    x = sub.add_parser("visual-hash", help="perceptual hash (pHash) of image files that have none yet")
+    x.add_argument("--seconds", type=int, default=1500)
+    x.add_argument("--collection")
+    x = sub.add_parser("similar", help="byte-different images that look the same (pHash distance)")
+    x.add_argument("--distance", type=int, default=6, help="max Hamming distance of 64 bits")
+    x.add_argument("--across", action="store_true", help="only groups spanning more than one collection")
+    x.add_argument("--limit", type=int, default=20)
+    x.add_argument("--collection")
     x = sub.add_parser("run", help="profile ingest + autoscan roots + hash (for a timer)")
     x.add_argument("--seconds", type=int, default=1500)
     x.add_argument("--stop-when", help="shell command; hashing stops while it succeeds")
@@ -66,6 +74,10 @@ def main(argv=None):
         core.ingest_archive(c, core.coll(c, a.name), a.archive, a.root, a.strip, a.skip)
     elif a.cmd == "hash":
         core.hash_pending(c, a.seconds, a.collection, a.stop_when)
+    elif a.cmd == "visual-hash":
+        visual.hash_pending(c, a.seconds, a.collection)
+    elif a.cmd == "similar":
+        visual.similar(c, a.distance, a.across, a.limit, a.collection)
     elif a.cmd == "run":
         core.run_all(c, a.seconds, a.stop_when)
     elif a.cmd == "report":

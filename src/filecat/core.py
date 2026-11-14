@@ -281,4 +281,9 @@ def run_all(c, seconds, stop_when=None):
         for l, (p, auto) in roots_of(c, cid).items():
             if auto:
                 scan_root(c, cl, l, p)
-    return hash_pending(c, seconds, stop_when=stop_when)
+    n = hash_pending(c, seconds, stop_when=stop_when)
+    from . import visual
+
+    if visual.available():  # optional extra: without Pillow the SHA-256 run is unchanged
+        visual.hash_pending(c, seconds, stop_when=stop_when)
+    return n
