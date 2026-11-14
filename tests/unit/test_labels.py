@@ -99,3 +99,27 @@ def test_profiles_without_labels_are_skipped(db, tree, capsys):
     core.scan_root(db, core.coll(db, "p"), "r", str(root))
     assert labels.read_pending(db, 5) == 0
     assert db.execute("SELECT COUNT(*) FROM label_scans").fetchone()[0] == 0
+
+
+def test_the_budget_is_checked_per_file_and_no_write_transaction_is_open_while_reading(db, tree, fake, monkeypatch):
+    from filecat.db import connect
+
+    setup(db, tree, {f"p{i}.jpg": b"x" for i in range(6)})
+    other = connect()
+    seen = []
+
+    def slow(self, rel):
+        # a second connection can write while a label source is being read: no write lock is held by the reader
+        other.execute("INSERT INTO collections(name) VALUES(?)", (f"w{len(seen)}",))
+        other.commit()
+        seen.append(rel)
+        monkeypatch.setattr(
+            labels.time, "time", lambda t=[__import__("time").time()]: t.__setitem__(0, t[0] + 10) or t[0]
+        )
+        return None
+
+    monkeypatch.setattr(Labeller, "labels", slow)
+    labels.read_pending(db, 15)
+    assert 1 <= len(seen) < 6  # the clock jumps 10 s per file: the slice ends early, the rest stays pending
+    assert db.execute("SELECT COUNT(*) FROM label_scans").fetchone()[0] == len(seen)
+    other.close()

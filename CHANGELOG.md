@@ -10,6 +10,7 @@ Newest first, grouped by day. One entry per change, in the same commit or PR as 
 - `labels.py`: **new**. `read_pending` (time-boxed, resumable; profiles without `labels` skipped), `summary`, `find`.
 - `cli.py`: `filecat labels [--seconds N] [--collection C]` reads; `filecat labels --find KIND=VALUE` lists files. `filecat run` also reads labels. `report` shows label counts per collection.
 - `profiles.py` docstring: the optional `labels` hook.
+- Review fixes: the time budget is checked per file, and results are collected with no write transaction open and written in batches of 50, so a slow label source (network mount) cannot lock the catalogue for other writers.
 
 ## 2026-11-14 (later)
 

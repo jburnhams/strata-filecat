@@ -29,6 +29,23 @@ def pending_where(exts):
     )
 
 
+def store(c, source, buf):
+    """Write a batch of (file id, state, labels) in one short transaction; returns (ok, none, error, labels) counts."""
+    nlab = 0
+    for fid, state, found in buf:
+        for kind, value in found:
+            c.execute("INSERT INTO file_labels(file_id,kind,value) VALUES(?,?,?)", (fid, kind, value))
+            nlab += 1
+        c.execute("INSERT INTO label_scans(file_id,source,state) VALUES(?,?,?)", (fid, source, state))
+    c.commit()
+    return (
+        sum(s == "ok" for _, s, _ in buf),
+        sum(s == "none" for _, s, _ in buf),
+        sum(s == "error" for _, s, _ in buf),
+        nlab,
+    )
+
+
 def read_pending(c, seconds, only=None):
     """Label every pending file of the collections whose profile can label, until the time budget is spent (resumable)."""
     end = time.time() + seconds
@@ -49,27 +66,21 @@ def read_pending(c, seconds, only=None):
                 if not rows:
                     break
                 last = rows[-1][0]
+                buf = []  # results are collected with no write transaction open (a slow read must not lock the catalogue)
                 for fid, rel in rows:
+                    if time.time() >= end:
+                        break  # the rest stays pending for the next slice
                     try:
                         found = prof.labels(rel)
-                    except OSError:
-                        found = None
-                        state = "error"
-                    except ValueError:  # a malformed label source: recorded once, not retried every slice
-                        found = None
-                        state = "error"
-                    else:
                         state = "none" if found is None else "ok"
-                    for kind, value in sorted(set(found or ())):
-                        c.execute("INSERT INTO file_labels(file_id,kind,value) VALUES(?,?,?)", (fid, kind, value))
-                        nlab += 1
-                    c.execute(
-                        "INSERT INTO label_scans(file_id,source,state) VALUES(?,?,?)", (fid, cl["profile"], state)
-                    )
-                    done += state == "ok"
-                    none += state == "none"
-                    bad += state == "error"
-                c.commit()
+                    except (OSError, ValueError):  # unreadable / malformed label source: recorded once, not retried
+                        found, state = None, "error"
+                    buf.append((fid, state, sorted(set(found or ()))))
+                    if len(buf) >= 50:
+                        d, n, b, k = store(c, cl["profile"], buf)
+                        done, none, bad, nlab, buf = done + d, none + n, bad + b, nlab + k, []
+                d, n, b, k = store(c, cl["profile"], buf)
+                done, none, bad, nlab = done + d, none + n, bad + b, nlab + k
     print(f"labels: {done} files labelled ({nlab} labels), {none} without a label source, {bad} unreadable")
     return done
 
