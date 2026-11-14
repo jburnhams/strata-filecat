@@ -78,3 +78,17 @@ class File(Base):
     current: Mapped[int] = mapped_column(Integer, server_default="1", default=1)
     orig_path: Mapped[str | None] = mapped_column(String, default=None)
     seen_gen: Mapped[int | None] = mapped_column(Integer, default=None)
+
+
+class VisualHash(Base):
+    """Perceptual hash of an image file row (one per file version; a new version is hashed again). `hash` is the 64-bit
+    pHash stored as a signed BIGINT (Postgres has no unsigned); `state` is 'ok', 'unsupported' (Pillow cannot open it) or
+    'error', so a bad file is tried once and not on every slice."""
+
+    __tablename__ = "visual_hashes"
+    file_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    algo: Mapped[str] = mapped_column(String, primary_key=True)
+    state: Mapped[str] = mapped_column(String, server_default="ok", default="ok")
+    hash: Mapped[int | None] = mapped_column(BigInteger, default=None)
+    width: Mapped[int | None] = mapped_column(Integer, default=None)
+    height: Mapped[int | None] = mapped_column(Integer, default=None)

@@ -41,6 +41,12 @@ def report(c, name=None):
             "SELECT COUNT(*),COALESCE(SUM(n-1),0),COALESCE(SUM((n-1)*sz),0) FROM (SELECT COUNT(*) n,MAX(size) sz FROM files WHERE collection_id=? AND current=1 AND sha256 IS NOT NULL GROUP BY sha256 HAVING COUNT(*)>1) g",
             (cid,),
         ).fetchone()
+        vh, vb = c.execute(
+            "SELECT COUNT(*),COALESCE(SUM(CASE WHEN v.state='ok' THEN 0 ELSE 1 END),0) FROM visual_hashes v JOIN files f ON f.id=v.file_id WHERE f.collection_id=? AND f.current=1",
+            (cid,),
+        ).fetchone()
+        if vh:
+            print(f"   visual hashes: {vh:,} image files ({vb:,} unreadable)")
         print(f"   identical content inside the collection: {g:,} groups, {ex:,} redundant files, {gb(red)}")
     if not name:
         g, ex, red = c.execute(

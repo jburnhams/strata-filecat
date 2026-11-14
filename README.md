@@ -23,6 +23,9 @@ select c.name, f.root, f.path from files f join collections c on c.id = f.collec
 where hex(f.sha256) like '41EF49%' and f.current = 1;
 ```
 
+## Visual hashes (optional)
+`pip install -e '.[visual]'` (Pillow, pillow-heif) adds a perceptual hash (pHash, 64 bits) for every image file: `filecat visual-hash` (also part of `filecat run`), then `filecat similar [--across]` lists byte-different files that are the same picture (resized, recompressed, another format). EXIF orientation is applied; crops are not matched. See [docs/progress.md](docs/progress.md).
+
 ## How it works
 - **Collections** have named **roots** (label -> directory, optional `autoscan`) and a **profile**.
 - **Two hash tiers.** Archive indexes already hold size, CRC32 and mtime per entry, so `ingest-archive` records them without reading data; size + CRC32 only ever gives *candidates*. `filecat hash` computes SHA-256 for files on disk that have none, in time-boxed, resumable slices (so it can run at low priority next to downloads). A new version with the same size and CRC32 as the one it replaces inherits its hash.

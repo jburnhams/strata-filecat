@@ -311,14 +311,15 @@ def test_a_catalogue_from_before_alembic_is_adopted_not_recreated(tmp_path, monk
     old.close()
     monkeypatch.setenv("FILECAT_DB", str(p))
     c = connect()
-    assert c.execute("SELECT version_num FROM alembic_version").scalar() == "0001"
+    head = c.execute("SELECT version_num FROM alembic_version").scalar()  # stamped at 0001, then migrated to the latest
+    assert head != "0001" and c.execute("SELECT COUNT(*) FROM visual_hashes").scalar() == 0
     assert [r[0] for r in c.execute("SELECT name FROM collections")] == ["kept"]
     d = tree("d", {"a.txt": b"x"})
     core.add_collection(c, "new", roots=[f"r={d}"])
     core.scan_root(c, core.coll(c, "new"), "r", str(d))
     assert one(c, "SELECT COUNT(*) FROM files")[0] == 1
     c.close()
-    assert connect().execute("SELECT version_num FROM alembic_version").scalar() == "0001"  # idempotent
+    assert connect().execute("SELECT version_num FROM alembic_version").scalar() == head  # idempotent
 
 
 def test_where_the_catalogue_is(tmp_path, monkeypatch):
