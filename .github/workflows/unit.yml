@@ -43,3 +43,6 @@ jobs:
     with:
       install: uv pip install -e . --group dev
       tests: tests/unit
+      # strata-python's own db pytest plugin (strata_python.db, the successor of omarchy-db) registers fixtures with the same
+      # names as omarchy_db.testing's and refuses to run while it is off; filecat is still on omarchy-db, so switch it off here.
+      pytest-args: -o addopts= -p no:strata_python_db
