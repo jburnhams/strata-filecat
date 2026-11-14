@@ -2,6 +2,15 @@
 
 Newest first, grouped by day. One entry per change, in the same commit or PR as the change.
 
+## 2026-11-15
+
+**File labels from a profile (branch `file-labels`).** Exports often carry labels next to the file (a sidecar listing the people in a photo, say). filecat stays service-neutral: a profile opts in with `label_exts` and `labels(rel_path)`; filecat reads each current file once and stores the result.
+
+- `models.py`, migration `8c561a25a69a`: **new tables** `file_labels` (file_id, kind, value; index on kind, value) and `label_scans` (file_id, source, state ok / none / error: what has been looked at).
+- `labels.py`: **new**. `read_pending` (time-boxed, resumable; profiles without `labels` skipped), `summary`, `find`.
+- `cli.py`: `filecat labels [--seconds N] [--collection C]` reads; `filecat labels --find KIND=VALUE` lists files. `filecat run` also reads labels. `report` shows label counts per collection.
+- `profiles.py` docstring: the optional `labels` hook.
+
 ## 2026-11-14 (later)
 
 **Visual hashes: reuse and workers (branch `visual-hash-reuse-workers`).** The first full run over a real photo library would decode every file row, including every byte-identical copy.

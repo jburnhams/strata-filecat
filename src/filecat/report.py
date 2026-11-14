@@ -1,5 +1,6 @@
 """Reports: per collection and across collections."""
 
+from . import labels
 from .core import coll, roots_of
 
 
@@ -47,6 +48,8 @@ def report(c, name=None):
         ).fetchone()
         if vh:
             print(f"   visual hashes: {vh:,} image files ({vb:,} unreadable)")
+        for kind, nv, nl in labels.summary(c, cid):
+            print(f"   labels '{kind}': {nl:,} on current files, {nv:,} distinct")
         print(f"   identical content inside the collection: {g:,} groups, {ex:,} redundant files, {gb(red)}")
     if not name:
         g, ex, red = c.execute(

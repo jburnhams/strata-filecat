@@ -2,7 +2,7 @@
 
 import argparse
 
-from . import core, report, visual
+from . import core, labels, report, visual
 from .db import connect
 
 
@@ -42,6 +42,11 @@ def build_parser():
     x.add_argument("--across", action="store_true", help="only groups spanning more than one collection")
     x.add_argument("--limit", type=int, default=20)
     x.add_argument("--collection")
+    x = sub.add_parser("labels", help="read labels (e.g. people) a profile finds next to files; each file once")
+    x.add_argument("--seconds", type=int, default=1500)
+    x.add_argument("--collection")
+    x.add_argument("--find", metavar="KIND=VALUE", help="list the files with a label instead of reading")
+    x.add_argument("--limit", type=int, default=20)
     x = sub.add_parser("run", help="profile ingest + autoscan roots + hash (for a timer)")
     x.add_argument("--seconds", type=int, default=1500)
     x.add_argument("--workers", type=int, default=2, help="visual-hash decoding processes")
@@ -80,6 +85,12 @@ def main(argv=None):
         visual.hash_pending(c, a.seconds, a.collection, workers=a.workers)
     elif a.cmd == "similar":
         visual.similar(c, a.distance, a.across, a.limit, a.collection)
+    elif a.cmd == "labels":
+        if a.find:
+            kind, _, value = a.find.partition("=")
+            labels.find(c, kind, value, a.collection, a.limit)
+        else:
+            labels.read_pending(c, a.seconds, a.collection)
     elif a.cmd == "run":
         core.run_all(c, a.seconds, a.stop_when, a.workers)
     elif a.cmd == "report":

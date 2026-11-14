@@ -286,4 +286,7 @@ def run_all(c, seconds, stop_when=None, workers=2):
 
     if visual.available():  # optional extra: without Pillow the SHA-256 run is unchanged
         visual.hash_pending(c, seconds, stop_when=stop_when, workers=workers)
+    from . import labels
+
+    labels.read_pending(c, seconds)  # profiles without `labels` are skipped; a labelled file is never read twice
     return n
