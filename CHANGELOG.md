@@ -6,7 +6,7 @@ Newest first, grouped by day. One entry per change, in the same commit or PR as 
 
 **File labels from a profile (branch `file-labels`).** Exports often carry labels next to the file (a sidecar listing the people in a photo, say). filecat stays service-neutral: a profile opts in with `label_exts` and `labels(rel_path)`; filecat reads each current file once and stores the result.
 
-- `models.py`, migration `c7ec82bbd686`: **new tables** `file_labels` (file_id, source, kind, value; index on kind, value) and `label_scans` (file_id, source, state ok / none / error: what has been looked at).
+- `models.py`, migrations `8c561a25a69a` (tables) and `83083cb708ae` (`source` joins the primary key; existing rows kept): **new tables** `file_labels` (file_id, source, kind, value; index on kind, value) and `label_scans` (file_id, source, state ok / none / error: what has been looked at).
 - `labels.py`: **new**. `read_pending` (time-boxed, resumable; profiles without `labels` skipped), `summary`, `find`.
 - `cli.py`: `filecat labels [--seconds N] [--collection C]` reads; `filecat labels --find KIND=VALUE` lists files. `filecat run` also reads labels. `report` shows label counts per collection.
 - Callers can attach their own labels: `filecat labels --import FILE --source NAME` (JSON lines `{collection, root, path, labels: [[kind, value]]}`, `-` is stdin) or `labels.put(...)`; a re-import replaces that source's labels of the file, labels from other sources (the profile's own) stay; files not in the catalogue are counted, not added (scan first). Labels go next to the hashes: `file_labels` joins `files` and `visual_hashes`.
