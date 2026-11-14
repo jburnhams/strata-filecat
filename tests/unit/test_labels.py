@@ -123,3 +123,29 @@ def test_the_budget_is_checked_per_file_and_no_write_transaction_is_open_while_r
     assert 1 <= len(seen) < 6  # the clock jumps 10 s per file: the slice ends early, the rest stays pending
     assert db.execute("SELECT COUNT(*) FROM label_scans").fetchone()[0] == len(seen)
     other.close()
+
+
+def test_a_caller_attaches_its_own_labels_and_a_reimport_replaces_them(db, tree, fake, tmp_path, capsys):
+    setup(db, tree, {"a.jpg": b"x", "a.jpg.json": {"people": ["Ann"]}, "b.jpg": b"y"})
+    labels.read_pending(db, 30)
+    src = tmp_path / "in.jsonl"
+    src.write_text(
+        json.dumps({"collection": "c", "root": "r", "path": "a.jpg", "labels": [["photo", "17"], ["tag", "x"]]})
+        + "\n"
+        + json.dumps({"collection": "c", "root": "r", "path": "gone.jpg", "labels": [["photo", "9"]]})  # not catalogued
+        + "\nnot json\n\n"
+    )
+    cli.main(["labels", "--import", str(src), "--source", "app"])
+    assert "1 files labelled by app, 1 not in the catalogue, 1 unreadable lines" in capsys.readouterr().out
+    rows = sorted(db.execute("SELECT source,kind,value FROM file_labels").fetchall())
+    assert rows == [("app", "photo", "17"), ("app", "tag", "x"), ("lab", "person", "Ann")]  # the profile's label stays
+    assert labels.put(db, "c", "r", "a.jpg", [("photo", "18")], "app")
+    assert sorted(r[0] for r in db.execute("SELECT value FROM file_labels WHERE source='app'").fetchall()) == ["18"]
+    assert len(labels.find(db, "photo", "18")) == 1
+
+
+def test_import_needs_a_source(db, fake, tmp_path):
+    f = tmp_path / "x.jsonl"
+    f.write_text("")
+    with pytest.raises(SystemExit):
+        cli.main(["labels", "--import", str(f)])

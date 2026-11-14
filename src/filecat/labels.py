@@ -34,7 +34,7 @@ def store(c, source, buf):
     nlab = 0
     for fid, state, found in buf:
         for kind, value in found:
-            c.execute("INSERT INTO file_labels(file_id,kind,value) VALUES(?,?,?)", (fid, kind, value))
+            c.execute("INSERT INTO file_labels(file_id,source,kind,value) VALUES(?,?,?,?)", (fid, source, kind, value))
             nlab += 1
         c.execute("INSERT INTO label_scans(file_id,source,state) VALUES(?,?,?)", (fid, source, state))
     c.commit()
@@ -44,6 +44,43 @@ def store(c, source, buf):
         sum(s == "error" for _, s, _ in buf),
         nlab,
     )
+
+
+def put(c, collection, root, path, found, source):
+    """Attach labels (kind, value) to the current catalogue row of a file, replacing what `source` set before.
+    Returns False when the file is not in the catalogue (scan it first). For callers that know more about a file than
+    its export says: `filecat labels --import`, or this function directly."""
+    row = c.execute(
+        "SELECT f.id FROM files f WHERE f.collection_id=? AND f.root=? AND f.path=? AND f.current=1",
+        (coll(c, collection)["id"], root, path),
+    ).fetchone()
+    if row is None:
+        return False
+    c.execute("DELETE FROM file_labels WHERE file_id=? AND source=?", (row[0], source))
+    for kind, value in sorted({(str(k), str(v)) for k, v in found}):
+        c.execute("INSERT INTO file_labels(file_id,source,kind,value) VALUES(?,?,?,?)", (row[0], source, kind, value))
+    c.commit()
+    return True
+
+
+def import_lines(c, lines, source):
+    """Labels from JSON lines {"collection": ..., "root": ..., "path": ..., "labels": [["kind", "value"], ...]}."""
+    import json
+
+    done = unknown = bad = 0
+    for line in lines:
+        if not line.strip():
+            continue
+        try:
+            d = json.loads(line)
+            ok = put(c, d["collection"], d["root"], d["path"], [tuple(x) for x in d.get("labels", ())], source)
+        except (ValueError, KeyError, TypeError):
+            bad += 1
+            continue
+        done += ok
+        unknown += not ok
+    print(f"import: {done} files labelled by {source}, {unknown} not in the catalogue, {bad} unreadable lines")
+    return done
 
 
 def read_pending(c, seconds, only=None):

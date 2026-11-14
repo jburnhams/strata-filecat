@@ -101,6 +101,7 @@ class FileLabel(Base):
     __tablename__ = "file_labels"
     __table_args__ = (Index("file_labels_kv", "kind", "value"),)
     file_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    source: Mapped[str] = mapped_column(String, primary_key=True)
     kind: Mapped[str] = mapped_column(String, primary_key=True)
     value: Mapped[str] = mapped_column(String, primary_key=True)
 

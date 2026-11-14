@@ -1,6 +1,7 @@
 """filecat command line."""
 
 import argparse
+import sys
 
 from . import core, labels, report, visual
 from .db import connect
@@ -46,6 +47,13 @@ def build_parser():
     x.add_argument("--seconds", type=int, default=1500)
     x.add_argument("--collection")
     x.add_argument("--find", metavar="KIND=VALUE", help="list the files with a label instead of reading")
+    x.add_argument(
+        "--import",
+        dest="import_",
+        metavar="FILE",
+        help='JSON lines {"collection","root","path","labels":[[kind,value]]}; "-" is stdin',
+    )
+    x.add_argument("--source", help="who sets the labels of --import (required with it)")
     x.add_argument("--limit", type=int, default=20)
     x = sub.add_parser("run", help="profile ingest + autoscan roots + hash (for a timer)")
     x.add_argument("--seconds", type=int, default=1500)
@@ -86,7 +94,12 @@ def main(argv=None):
     elif a.cmd == "similar":
         visual.similar(c, a.distance, a.across, a.limit, a.collection)
     elif a.cmd == "labels":
-        if a.find:
+        if a.import_:
+            if not a.source:
+                sys.exit("--import needs --source NAME")
+            f = sys.stdin if a.import_ == "-" else open(a.import_, encoding="utf-8")
+            labels.import_lines(c, f, a.source)
+        elif a.find:
             kind, _, value = a.find.partition("=")
             labels.find(c, kind, value, a.collection, a.limit)
         else:
