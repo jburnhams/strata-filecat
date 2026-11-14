@@ -21,6 +21,7 @@ ALGO = "phash64"
 EXTS = (".jpg", ".jpeg", ".jpe", ".png", ".gif", ".bmp", ".tif", ".tiff", ".webp", ".heic", ".heif", ".avif")
 N = 32
 K = 8
+MAX_DISTINCT = 5000  # distinct hashes sharing one band that `similar` still compares pairwise
 _COS = [[math.cos((2 * x + 1) * u * math.pi / (2 * N)) for x in range(N)] for u in range(K)]
 
 
@@ -86,30 +87,37 @@ def pending_where():
     )
 
 
-def hash_pending(c, seconds, only=None):
+def hash_pending(c, seconds, only=None, stop_when=None):
     """pHash of current image files on disk that have none, until the time budget is spent (resumable)."""
-    from .core import coll
+    from .core import coll, should_yield
 
     if not available():
         print("visual hashing needs Pillow: pip install 'strata-filecat[visual]'", file=sys.stderr)
         return 0
     _register_heif()
     end = time.time() + seconds
-    done = bad = 0
+    done = bad = last = (
+        0  # `last`: keyset cursor, so rows left pending (not on disk yet) are not fetched again in this slice
+    )
+    yst = {"t": 0.0, "y": False}
     paths = {(cid, label): p for cid, label, p in c.execute("SELECT collection_id,label,path FROM roots")}
     q = (
         "SELECT f.id,f.collection_id,f.root,f.path FROM files f WHERE "
         + pending_where()
         + (" AND f.collection_id=%d" % coll(c, only)["id"] if only else "")
-        + " ORDER BY f.id LIMIT 200"
+        + " AND f.id>? ORDER BY f.id LIMIT 200"
     )
     while time.time() < end:
-        rows = c.execute(q).fetchall()
+        rows = c.execute(q, (last,)).fetchall()
         c.commit()
         if not rows:
             break
+        last = rows[-1][0]
         for fid, cid, root, path in rows:
             if time.time() >= end:
+                break
+            if should_yield(stop_when, yst):  # another job needs the disk: same rule as the SHA-256 pass
+                end = 0
                 break
             base = paths.get((cid, root))
             fp = os.path.join(base, path) if base else None
@@ -166,14 +174,32 @@ def similar(c, max_dist=6, across=False, limit=20, collection=None):
             x = parent[x]
         return x
 
+    skipped = 0
     for members in buckets.values():
-        if len(members) < 2 or len(members) > 2000:  # a huge bucket is a flat/blank image band, not a match
+        if len(members) < 2:
             continue
-        for a in range(len(members)):
-            for b in range(a + 1, len(members)):
-                i, j = members[a], members[b]
-                if find(i) != find(j) and (items[i][0] ^ items[j][0]).bit_count() <= max_dist:
+        # Identical hashes (blank frames, screenshots of one app) are one point: join them, then compare the distinct
+        # values only, so a crowded band costs the square of the distinct hashes, not of the files.
+        by_val = {}
+        for i in members:
+            by_val.setdefault(items[i][0], []).append(i)
+        for same in by_val.values():
+            for i in same[1:]:
+                parent[find(i)] = find(same[0])
+        vals = list(by_val)
+        if len(vals) > MAX_DISTINCT:
+            skipped += 1
+            continue
+        for a in range(len(vals)):
+            for b in range(a + 1, len(vals)):
+                if (vals[a] ^ vals[b]).bit_count() <= max_dist:
+                    i, j = by_val[vals[a]][0], by_val[vals[b]][0]
                     parent[find(i)] = find(j)
+    if skipped:
+        print(
+            f"warning: {skipped} crowded hash bands skipped (> {MAX_DISTINCT} distinct hashes); some matches may be missing",
+            file=sys.stderr,
+        )
     groups = {}
     for i in range(len(items)):
         groups.setdefault(find(i), []).append(i)

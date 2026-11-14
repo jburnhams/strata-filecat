@@ -10,6 +10,7 @@ Newest first, grouped by day. One entry per change, in the same commit or PR as 
 - `models.py`, migration `e9abb7519e6d`: **new table `visual_hashes`** (file_id, algo, state, hash as signed BIGINT, width, height), one row per file version.
 - `cli.py`: `filecat visual-hash [--seconds N] [--collection C]` and `filecat similar [--distance 6] [--across] [--collection C]` (groups of byte-different images within a Hamming distance; exact copies are left to `dups`). `filecat run` also runs the visual pass when Pillow is installed. `report` shows the visual-hash count per collection.
 - `pyproject.toml`: optional extra `visual` (pillow, pillow-heif), also in the dev group so the tests cover it. Without the extra everything else works as before.
+- Review fixes: the visual pass pages by id so images not on disk yet cannot stall a slice, honours `--stop-when`, and `similar` keeps matches inside crowded bands (identical hashes joined, distinct ones compared; a warning if a band is too crowded to compare).
 - Not covered: camera RAW (needs the embedded preview), video (see `docs/progress.md`), crops and rotations by other than EXIF (pHash is not invariant to them).
 
 ## 2026-11-10

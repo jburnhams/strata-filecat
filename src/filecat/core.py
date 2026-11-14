@@ -285,5 +285,5 @@ def run_all(c, seconds, stop_when=None):
     from . import visual
 
     if visual.available():  # optional extra: without Pillow the SHA-256 run is unchanged
-        visual.hash_pending(c, seconds)
+        visual.hash_pending(c, seconds, stop_when=stop_when)
     return n

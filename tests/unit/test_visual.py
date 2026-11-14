@@ -134,3 +134,39 @@ def test_without_pillow_the_pass_is_skipped_with_a_message(db, monkeypatch, caps
     monkeypatch.setattr(visual, "available", lambda: False)
     assert visual.hash_pending(db, 5) == 0
     assert "strata-filecat[visual]" in capsys.readouterr().err
+
+
+def test_files_not_on_disk_do_not_stall_the_slice(db, tree, monkeypatch):
+    """More than one batch (200) of pending images that are absent, then a real one: the real one is still reached."""
+    root = tree("c", {"z.png": b""})
+    pic(root / "z.png", 1)
+    core.add_collection(db, "c", roots=[f"r={root}"])
+    cid = core.coll(db, "c")["id"]
+    for i in range(250):  # ids below z.png's, as after indexing an archive that is not extracted yet
+        db.execute(
+            "INSERT INTO files(collection_id,root,path,size,source_id) VALUES(?,?,?,?,?)",
+            (cid, "r", f"gone{i}.jpg", 1, 1),
+        )
+    db.commit()
+    core.scan_root(db, core.coll(db, "c"), "r", str(root))
+    assert visual.hash_pending(db, 30) == 1
+
+
+def test_stop_when_pauses_the_visual_pass(db, tree):
+    catalogue(db, tree, {"a.png": lambda p: pic(p, 1)})
+    assert visual.hash_pending(db, 30, stop_when="true") == 0
+    assert visual.hash_pending(db, 30, stop_when="false") == 1
+
+
+def test_similar_matches_in_a_crowded_band_and_warns_when_it_must_skip(db, tree, monkeypatch, capsys):
+    catalogue(db, tree, {"a.png": lambda p: pic(p, 1), "b.jpg": lambda p: pic(p, 1, (90, 60))})
+    core.hash_pending(db, 30)
+    visual.hash_pending(db, 30)
+    monkeypatch.setattr(
+        visual, "MAX_DISTINCT", 1
+    )  # force the "crowded" path: two distinct hashes in a band is too many
+    capsys.readouterr()
+    visual.similar(db)
+    assert "crowded hash bands skipped" in capsys.readouterr().err
+    monkeypatch.setattr(visual, "MAX_DISTINCT", 5000)
+    assert len(visual.similar(db)) <= 1
