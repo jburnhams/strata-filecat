@@ -8,6 +8,7 @@ Newest first, grouped by day. One entry per change, in the same commit or PR as 
 
 - `visual.py`: a file with the same SHA-256 as one already hashed copies that row instead of decoding again (also between files of one batch). Decoding runs in `--workers` processes (default 2, niced by 10, spawn context); only the parent process touches the database. `--workers 1` stays in-process.
 - `cli.py`: `--workers` on `visual-hash` and `run`. The output reports how many hashes were reused.
+- Review fixes: decoding is bounded to a small chunk in flight (workers x 4) and the time budget and `--stop-when` are rechecked between chunks, so a slice ends promptly; a same-SHA twin of a file that hit an I/O error is decoded from its own path instead of inheriting the error.
 - Tests: reuse across and within a batch, pool results equal in-process results.
 
 ## 2026-11-14

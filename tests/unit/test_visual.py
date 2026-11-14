@@ -210,3 +210,32 @@ def test_worker_pool_gives_the_same_hashes_as_in_process(db, tree):
         ).fetchone()[0]
         == "unsupported"
     )
+
+
+def test_budget_and_stop_when_are_rechecked_between_chunks_not_per_batch(db, tree, monkeypatch):
+    catalogue(db, tree, {f"p{i}.png": (lambda i: lambda p: pic(p, i))(i) for i in range(1, 21)})
+    calls = []
+    real = visual._work
+    monkeypatch.setattr(visual, "_work", lambda fp: calls.append(fp) or real(fp))
+    state = {"n": 0}
+
+    def stop(_cmd, _st):  # yields after 6 files have been looked at
+        state["n"] += 1
+        return state["n"] > 6
+
+    monkeypatch.setattr("filecat.core.should_yield", stop)
+    assert (
+        visual.hash_pending(db, 60, stop_when="x", workers=1) == 6
+    )  # stops at the 7th file; the old per-batch loop would have hashed all 20
+    assert len(calls) == 6
+
+
+def test_a_same_batch_duplicate_is_decoded_itself_when_the_owner_hit_an_io_error(db, tree, monkeypatch):
+    catalogue(db, tree, {"a.png": lambda p: pic(p, 1), "copy.png": lambda p: pic(p, 1)})
+    core.hash_pending(db, 30)
+    real = visual._work
+    n = []
+    monkeypatch.setattr(visual, "_work", lambda fp: ("error",) if not n.append(fp) and len(n) == 1 else real(fp))
+    visual.hash_pending(db, 30, workers=1)
+    states = sorted(r[0] for r in db.execute("SELECT v.state FROM visual_hashes v").fetchall())
+    assert states == ["error", "ok"]  # the first file failed on its own path; its twin was decoded, not marked error

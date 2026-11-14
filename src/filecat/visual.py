@@ -140,6 +140,41 @@ def hash_pending(c, seconds, only=None, stop_when=None, workers=2):
     pool = (
         ProcessPoolExecutor(workers, mp_context=get_context("spawn"), initializer=_init_worker) if workers > 1 else None
     )
+    chunk = max(4, workers * 4)  # decodes in flight at once: the time budget and stop-when are rechecked between chunks
+
+    def store(fid, res):
+        nonlocal done, bad
+        if res[0] == "ok":
+            c.execute(
+                "INSERT INTO visual_hashes(file_id,algo,state,hash,width,height) VALUES(?,?,?,?,?,?)",
+                (fid, ALGO, "ok", res[1], res[2], res[3]),
+            )
+            done += 1
+        else:
+            c.execute("INSERT INTO visual_hashes(file_id,algo,state) VALUES(?,?,?)", (fid, ALGO, res[0]))
+            bad += 1
+
+    def flush(todo, twin):
+        nonlocal reused, done, bad
+        for fid, job in todo:
+            store(fid, job.result() if pool else _work(job))
+        c.commit()
+        for fid, owner, fp in twin:  # same bytes as a file decoded just above
+            r = c.execute(
+                "SELECT state,hash,width,height FROM visual_hashes WHERE file_id=? AND algo=?", (owner, ALGO)
+            ).fetchone()
+            if r[0] == "error":  # an I/O failure belongs to that path, not to the bytes: try this path itself
+                store(fid, _work(fp))
+            else:
+                c.execute(
+                    "INSERT INTO visual_hashes(file_id,algo,state,hash,width,height) VALUES(?,?,?,?,?,?)",
+                    (fid, ALGO, r[0], r[1], r[2], r[3]),
+                )
+                reused += 1
+                done += r[0] == "ok"
+                bad += r[0] != "ok"
+        c.commit()
+
     try:
         while time.time() < end:
             rows = c.execute(q, (last,)).fetchall()
@@ -148,8 +183,8 @@ def hash_pending(c, seconds, only=None, stop_when=None, workers=2):
                 break
             last = rows[-1][0]
             todo = []  # (file id, future or path)
-            twin = []  # (file id, id of the same-SHA file of this batch that is being decoded)
-            inflight = {}  # sha -> file id being decoded in this batch
+            twin = []  # (file id, id of the same-SHA file being decoded in this chunk, own path)
+            inflight = {}  # sha -> file id being decoded in this chunk
             for fid, cid, root, path, sha in rows:
                 if time.time() >= end:
                     break
@@ -170,36 +205,15 @@ def hash_pending(c, seconds, only=None, stop_when=None, workers=2):
                     done += 1
                     continue
                 if sha is not None and sha in inflight:
-                    twin.append((fid, inflight[sha]))
+                    twin.append((fid, inflight[sha], fp))
                     continue
                 if sha is not None:
                     inflight[sha] = fid
                 todo.append((fid, pool.submit(_work, fp) if pool else fp))
-            c.commit()
-            for fid, job in todo:
-                res = job.result() if pool else _work(job)
-                if res[0] == "ok":
-                    c.execute(
-                        "INSERT INTO visual_hashes(file_id,algo,state,hash,width,height) VALUES(?,?,?,?,?,?)",
-                        (fid, ALGO, "ok", res[1], res[2], res[3]),
-                    )
-                    done += 1
-                else:
-                    c.execute("INSERT INTO visual_hashes(file_id,algo,state) VALUES(?,?,?)", (fid, ALGO, res[0]))
-                    bad += 1
-                c.commit()
-            for fid, owner in twin:  # same bytes as a file decoded just above: copy its row
-                r = c.execute(
-                    "SELECT state,hash,width,height FROM visual_hashes WHERE file_id=? AND algo=?", (owner, ALGO)
-                ).fetchone()
-                c.execute(
-                    "INSERT INTO visual_hashes(file_id,algo,state,hash,width,height) VALUES(?,?,?,?,?,?)",
-                    (fid, ALGO, r[0], r[1], r[2], r[3]),
-                )
-                reused += 1
-                done += r[0] == "ok"
-                bad += r[0] != "ok"
-            c.commit()
+                if len(todo) >= chunk:
+                    flush(todo, twin)
+                    todo, twin, inflight = [], [], {}
+            flush(todo, twin)  # what was collected before the budget ran out is finished; nothing new is started
     finally:
         if pool:
             pool.shutdown()
