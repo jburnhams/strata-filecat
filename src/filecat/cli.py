@@ -36,6 +36,7 @@ def build_parser():
     x = sub.add_parser("visual-hash", help="perceptual hash (pHash) of image files that have none yet")
     x.add_argument("--seconds", type=int, default=1500)
     x.add_argument("--collection")
+    x.add_argument("--workers", type=int, default=2, help="decoding processes (default 2, niced; 1 = in-process)")
     x = sub.add_parser("similar", help="byte-different images that look the same (pHash distance)")
     x.add_argument("--distance", type=int, default=6, help="max Hamming distance of 64 bits")
     x.add_argument("--across", action="store_true", help="only groups spanning more than one collection")
@@ -43,6 +44,7 @@ def build_parser():
     x.add_argument("--collection")
     x = sub.add_parser("run", help="profile ingest + autoscan roots + hash (for a timer)")
     x.add_argument("--seconds", type=int, default=1500)
+    x.add_argument("--workers", type=int, default=2, help="visual-hash decoding processes")
     x.add_argument("--stop-when", help="shell command; hashing stops while it succeeds")
     x = sub.add_parser("report")
     x.add_argument("name", nargs="?")
@@ -75,11 +77,11 @@ def main(argv=None):
     elif a.cmd == "hash":
         core.hash_pending(c, a.seconds, a.collection, a.stop_when)
     elif a.cmd == "visual-hash":
-        visual.hash_pending(c, a.seconds, a.collection)
+        visual.hash_pending(c, a.seconds, a.collection, workers=a.workers)
     elif a.cmd == "similar":
         visual.similar(c, a.distance, a.across, a.limit, a.collection)
     elif a.cmd == "run":
-        core.run_all(c, a.seconds, a.stop_when)
+        core.run_all(c, a.seconds, a.stop_when, a.workers)
     elif a.cmd == "report":
         report.report(c, a.name)
     elif a.cmd == "dups":

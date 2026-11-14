@@ -87,8 +87,39 @@ def pending_where():
     )
 
 
-def hash_pending(c, seconds, only=None, stop_when=None):
-    """pHash of current image files on disk that have none, until the time budget is spent (resumable)."""
+def _init_worker():
+    _register_heif()
+    if hasattr(os, "nice"):  # a background job: stay out of the way of whatever else runs on the machine
+        os.nice(10)
+
+
+def _work(fp):
+    """Runs in a worker process: ('ok', hash, w, h) or (state,). Only computes; the parent does all the database work."""
+    try:
+        h, w, ht = phash_file(fp)
+        return ("ok", to_signed(h), w, ht)
+    except Exception as e:
+        return ("unsupported" if type(e).__name__ == "UnidentifiedImageError" else "error",)
+
+
+def _reuse(c, sha):
+    """(hash, width, height) already computed for another file with the same SHA-256 (same bytes, same picture)."""
+    if sha is None:
+        return None
+    return c.execute(
+        "SELECT v.hash,v.width,v.height FROM files f JOIN visual_hashes v ON v.file_id=f.id "
+        "WHERE f.sha256=? AND f.current=1 AND v.algo=? AND v.state='ok' LIMIT 1",
+        (sha, ALGO),
+    ).fetchone()
+
+
+def hash_pending(c, seconds, only=None, stop_when=None, workers=2):
+    """pHash of current image files on disk that have none, until the time budget is spent (resumable).
+    A file with the same SHA-256 as one already hashed copies that hash instead of decoding again. Decoding runs in
+    `workers` processes (default 2, niced; 1 = in this process); the database is only touched from this process."""
+    from concurrent.futures import ProcessPoolExecutor
+    from multiprocessing import get_context
+
     from .core import coll, should_yield
 
     if not available():
@@ -96,50 +127,100 @@ def hash_pending(c, seconds, only=None, stop_when=None):
         return 0
     _register_heif()
     end = time.time() + seconds
-    done = bad = last = (
-        0  # `last`: keyset cursor, so rows left pending (not on disk yet) are not fetched again in this slice
-    )
+    done = bad = reused = 0
+    last = 0  # keyset cursor, so rows left pending (not on disk yet) are not fetched again in this slice
     yst = {"t": 0.0, "y": False}
     paths = {(cid, label): p for cid, label, p in c.execute("SELECT collection_id,label,path FROM roots")}
     q = (
-        "SELECT f.id,f.collection_id,f.root,f.path FROM files f WHERE "
+        "SELECT f.id,f.collection_id,f.root,f.path,f.sha256 FROM files f WHERE "
         + pending_where()
         + (" AND f.collection_id=%d" % coll(c, only)["id"] if only else "")
         + " AND f.id>? ORDER BY f.id LIMIT 200"
     )
-    while time.time() < end:
-        rows = c.execute(q, (last,)).fetchall()
+    pool = (
+        ProcessPoolExecutor(workers, mp_context=get_context("spawn"), initializer=_init_worker) if workers > 1 else None
+    )
+    chunk = max(4, workers * 4)  # decodes in flight at once: the time budget and stop-when are rechecked between chunks
+
+    def store(fid, res):
+        nonlocal done, bad
+        if res[0] == "ok":
+            c.execute(
+                "INSERT INTO visual_hashes(file_id,algo,state,hash,width,height) VALUES(?,?,?,?,?,?)",
+                (fid, ALGO, "ok", res[1], res[2], res[3]),
+            )
+            done += 1
+        else:
+            c.execute("INSERT INTO visual_hashes(file_id,algo,state) VALUES(?,?,?)", (fid, ALGO, res[0]))
+            bad += 1
+
+    def flush(todo, twin):
+        nonlocal reused, done, bad
+        for fid, job in todo:
+            store(fid, job.result() if pool else _work(job))
         c.commit()
-        if not rows:
-            break
-        last = rows[-1][0]
-        for fid, cid, root, path in rows:
-            if time.time() >= end:
-                break
-            if should_yield(stop_when, yst):  # another job needs the disk: same rule as the SHA-256 pass
-                end = 0
-                break
-            base = paths.get((cid, root))
-            fp = os.path.join(base, path) if base else None
-            if fp is None or not os.path.exists(fp):
-                continue  # not on disk (yet): left pending, like the SHA-256 pass leaves a file it cannot read
-            try:
-                h, w, ht = phash_file(fp)
+        for fid, owner, fp in twin:  # same bytes as a file decoded just above
+            r = c.execute(
+                "SELECT state,hash,width,height FROM visual_hashes WHERE file_id=? AND algo=?", (owner, ALGO)
+            ).fetchone()
+            if r[0] == "error":  # an I/O failure belongs to that path, not to the bytes: try this path itself
+                store(fid, _work(fp))
+            else:
                 c.execute(
                     "INSERT INTO visual_hashes(file_id,algo,state,hash,width,height) VALUES(?,?,?,?,?,?)",
-                    (fid, ALGO, "ok", to_signed(h), w, ht),
+                    (fid, ALGO, r[0], r[1], r[2], r[3]),
                 )
-                done += 1
-            except Exception as e:
-                c.execute(
-                    "INSERT INTO visual_hashes(file_id,algo,state) VALUES(?,?,?)",
-                    (fid, ALGO, "unsupported" if type(e).__name__ == "UnidentifiedImageError" else "error"),
-                )
-                bad += 1
-            c.commit()
+                reused += 1
+                done += r[0] == "ok"
+                bad += r[0] != "ok"
         c.commit()
+
+    try:
+        while time.time() < end:
+            rows = c.execute(q, (last,)).fetchall()
+            c.commit()
+            if not rows:
+                break
+            last = rows[-1][0]
+            todo = []  # (file id, future or path)
+            twin = []  # (file id, id of the same-SHA file being decoded in this chunk, own path)
+            inflight = {}  # sha -> file id being decoded in this chunk
+            for fid, cid, root, path, sha in rows:
+                if time.time() >= end:
+                    break
+                if should_yield(stop_when, yst):  # another job needs the disk: same rule as the SHA-256 pass
+                    end = 0
+                    break
+                base = paths.get((cid, root))
+                fp = os.path.join(base, path) if base else None
+                if fp is None or not os.path.exists(fp):
+                    continue  # not on disk (yet): left pending, like the SHA-256 pass leaves a file it cannot read
+                r = _reuse(c, sha)
+                if r:
+                    c.execute(
+                        "INSERT INTO visual_hashes(file_id,algo,state,hash,width,height) VALUES(?,?,?,?,?,?)",
+                        (fid, ALGO, "ok", r[0], r[1], r[2]),
+                    )
+                    reused += 1
+                    done += 1
+                    continue
+                if sha is not None and sha in inflight:
+                    twin.append((fid, inflight[sha], fp))
+                    continue
+                if sha is not None:
+                    inflight[sha] = fid
+                todo.append((fid, pool.submit(_work, fp) if pool else fp))
+                if len(todo) >= chunk:
+                    flush(todo, twin)
+                    todo, twin, inflight = [], [], {}
+            flush(todo, twin)  # what was collected before the budget ran out is finished; nothing new is started
+    finally:
+        if pool:
+            pool.shutdown()
     left = c.execute("SELECT COUNT(*) FROM files f WHERE " + pending_where()).fetchone()[0]
-    print(f"visual hash: {done} images hashed, {bad} unreadable; still to hash: {left}")
+    print(
+        f"visual hash: {done} images hashed ({reused} reused from identical files), {bad} unreadable; still to hash: {left}"
+    )
     return done
 
 

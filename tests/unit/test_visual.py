@@ -73,22 +73,22 @@ def test_hash_pending_hashes_images_only_once_and_marks_bad_files(db, tree, caps
             "broken.png": lambda p: p.write_bytes(b"not an image"),
         },
     )
-    assert visual.hash_pending(db, 30) == 2
+    assert visual.hash_pending(db, 30, workers=1) == 2
     states = dict(db.execute("SELECT f.path,v.state FROM visual_hashes v JOIN files f ON f.id=v.file_id").fetchall())
     assert states == {"a.png": "ok", "sub/B.JPG": "ok", "broken.png": "unsupported"}
-    assert visual.hash_pending(db, 30) == 0  # nothing left, and the broken file is not retried
+    assert visual.hash_pending(db, 30, workers=1) == 0  # nothing left, and the broken file is not retried
     assert "0 unreadable" in capsys.readouterr().out
     core.scan_root(db, cl, "r", core.roots_of(db, cl["id"])["r"][0])
-    assert visual.hash_pending(db, 30) == 0
+    assert visual.hash_pending(db, 30, workers=1) == 0
 
 
 def test_changed_file_is_hashed_again(db, tree):
     cl = catalogue(db, tree, {"a.png": lambda p: pic(p, 1)})
-    visual.hash_pending(db, 30)
+    visual.hash_pending(db, 30, workers=1)
     root = core.roots_of(db, cl["id"])["r"][0]
     pic(root + "/a.png", 5, (300, 200))
     core.scan_root(db, cl, "r", root)
-    assert visual.hash_pending(db, 30) == 1
+    assert visual.hash_pending(db, 30, workers=1) == 1
     assert db.execute("SELECT COUNT(*) FROM visual_hashes").fetchone()[0] == 2  # one per version row
 
 
@@ -97,7 +97,7 @@ def test_similar_finds_different_files_of_the_same_picture_across_collections(db
     catalogue(db, tree, {"y/a_copy.jpg": lambda p: pic(p, 1, (120, 90), quality=70)}, name="two")
     catalogue(db, tree, {"z/exact.png": lambda p: pic(p, 1, (400, 300))}, name="three")
     core.hash_pending(db, 30)
-    visual.hash_pending(db, 30)
+    visual.hash_pending(db, 30, workers=1)
     capsys.readouterr()
     lines = visual.similar(db)
     assert len(lines) == 1 and lines[0].startswith("x3") and "other.png" not in lines[0]
@@ -109,7 +109,7 @@ def test_similar_finds_different_files_of_the_same_picture_across_collections(db
 def test_exact_copies_alone_are_not_reported_as_similar(db, tree):
     catalogue(db, tree, {"a.png": lambda p: pic(p, 1), "copy.png": lambda p: pic(p, 1)})
     core.hash_pending(db, 30)
-    visual.hash_pending(db, 30)
+    visual.hash_pending(db, 30, workers=1)
     assert visual.similar(db) == []
 
 
@@ -121,18 +121,18 @@ def test_cli_and_report(tmp_path, monkeypatch, capsys):
     pic(tmp_path / "pics" / "a.png", 1)
     pic(tmp_path / "pics" / "b.jpg", 1, (90, 60))
     cli.main(["collection", "add", "p", "--root", f"r={tmp_path / 'pics'},autoscan"])
-    cli.main(["run", "--seconds", "30"])
+    cli.main(["run", "--seconds", "30", "--workers", "1"])
     cli.main(["report", "p"])
     out = capsys.readouterr().out
     assert "visual hashes: 2 image files (0 unreadable)" in out
     cli.main(["similar", "--distance", "8"])
     assert "x2" in capsys.readouterr().out
-    cli.main(["visual-hash", "--collection", "p"])
+    cli.main(["visual-hash", "--collection", "p", "--workers", "1"])
 
 
 def test_without_pillow_the_pass_is_skipped_with_a_message(db, monkeypatch, capsys):
     monkeypatch.setattr(visual, "available", lambda: False)
-    assert visual.hash_pending(db, 5) == 0
+    assert visual.hash_pending(db, 5, workers=1) == 0
     assert "strata-filecat[visual]" in capsys.readouterr().err
 
 
@@ -149,19 +149,19 @@ def test_files_not_on_disk_do_not_stall_the_slice(db, tree, monkeypatch):
         )
     db.commit()
     core.scan_root(db, core.coll(db, "c"), "r", str(root))
-    assert visual.hash_pending(db, 30) == 1
+    assert visual.hash_pending(db, 30, workers=1) == 1
 
 
 def test_stop_when_pauses_the_visual_pass(db, tree):
     catalogue(db, tree, {"a.png": lambda p: pic(p, 1)})
-    assert visual.hash_pending(db, 30, stop_when="true") == 0
-    assert visual.hash_pending(db, 30, stop_when="false") == 1
+    assert visual.hash_pending(db, 30, stop_when="true", workers=1) == 0
+    assert visual.hash_pending(db, 30, stop_when="false", workers=1) == 1
 
 
 def test_similar_matches_in_a_crowded_band_and_warns_when_it_must_skip(db, tree, monkeypatch, capsys):
     catalogue(db, tree, {"a.png": lambda p: pic(p, 1), "b.jpg": lambda p: pic(p, 1, (90, 60))})
     core.hash_pending(db, 30)
-    visual.hash_pending(db, 30)
+    visual.hash_pending(db, 30, workers=1)
     monkeypatch.setattr(
         visual, "MAX_DISTINCT", 1
     )  # force the "crowded" path: two distinct hashes in a band is too many
@@ -170,3 +170,72 @@ def test_similar_matches_in_a_crowded_band_and_warns_when_it_must_skip(db, tree,
     assert "crowded hash bands skipped" in capsys.readouterr().err
     monkeypatch.setattr(visual, "MAX_DISTINCT", 5000)
     assert len(visual.similar(db)) <= 1
+
+
+def test_identical_files_reuse_the_hash_instead_of_decoding_again(db, tree, monkeypatch, capsys):
+    calls = []
+    real = visual.phash_file
+    monkeypatch.setattr(visual, "phash_file", lambda fp: calls.append(fp) or real(fp))
+    catalogue(
+        db, tree, {"a.png": lambda p: pic(p, 1), "copy.png": lambda p: pic(p, 1), "other.png": lambda p: pic(p, 2)}
+    )
+    core.hash_pending(db, 30)  # SHA-256 first: reuse needs it
+    capsys.readouterr()
+    assert visual.hash_pending(db, 30, workers=1) == 3
+    assert len(calls) == 2  # a.png and other.png; copy.png took a.png's hash
+    assert "1 reused" in capsys.readouterr().out
+    hashes = dict(db.execute("SELECT f.path,v.hash FROM visual_hashes v JOIN files f ON f.id=v.file_id").fetchall())
+    assert hashes["a.png"] == hashes["copy.png"] != hashes["other.png"]
+
+
+def test_worker_pool_gives_the_same_hashes_as_in_process(db, tree):
+    catalogue(
+        db,
+        tree,
+        {f"p{i}.png": (lambda i: lambda p: pic(p, i))(i) for i in range(1, 6)}
+        | {"bad.png": lambda p: p.write_bytes(b"x")},
+    )
+    assert visual.hash_pending(db, 60, workers=2) == 5
+    pooled = dict(
+        db.execute(
+            "SELECT f.path,v.hash FROM visual_hashes v JOIN files f ON f.id=v.file_id WHERE v.state='ok'"
+        ).fetchall()
+    )
+    assert all(
+        visual.to_signed(visual.phash_file(f"{core.roots_of(db, 1)['r'][0]}/{k}")[0]) == v for k, v in pooled.items()
+    )
+    assert (
+        db.execute(
+            "SELECT v.state FROM visual_hashes v JOIN files f ON f.id=v.file_id WHERE f.path='bad.png'"
+        ).fetchone()[0]
+        == "unsupported"
+    )
+
+
+def test_budget_and_stop_when_are_rechecked_between_chunks_not_per_batch(db, tree, monkeypatch):
+    catalogue(db, tree, {f"p{i}.png": (lambda i: lambda p: pic(p, i))(i) for i in range(1, 21)})
+    calls = []
+    real = visual._work
+    monkeypatch.setattr(visual, "_work", lambda fp: calls.append(fp) or real(fp))
+    state = {"n": 0}
+
+    def stop(_cmd, _st):  # yields after 6 files have been looked at
+        state["n"] += 1
+        return state["n"] > 6
+
+    monkeypatch.setattr("filecat.core.should_yield", stop)
+    assert (
+        visual.hash_pending(db, 60, stop_when="x", workers=1) == 6
+    )  # stops at the 7th file; the old per-batch loop would have hashed all 20
+    assert len(calls) == 6
+
+
+def test_a_same_batch_duplicate_is_decoded_itself_when_the_owner_hit_an_io_error(db, tree, monkeypatch):
+    catalogue(db, tree, {"a.png": lambda p: pic(p, 1), "copy.png": lambda p: pic(p, 1)})
+    core.hash_pending(db, 30)
+    real = visual._work
+    n = []
+    monkeypatch.setattr(visual, "_work", lambda fp: ("error",) if not n.append(fp) and len(n) == 1 else real(fp))
+    visual.hash_pending(db, 30, workers=1)
+    states = sorted(r[0] for r in db.execute("SELECT v.state FROM visual_hashes v").fetchall())
+    assert states == ["error", "ok"]  # the first file failed on its own path; its twin was decoded, not marked error
