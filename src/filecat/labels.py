@@ -131,19 +131,79 @@ def summary(c, cid):
     ).fetchall()
 
 
-def find(c, kind, value, collection=None, limit=20):
-    """Paths of current files with the label (kind=value)."""
+def _name(c, fid):
+    r = c.execute(
+        "SELECT (SELECT name FROM collections WHERE id=f.collection_id),f.root,f.path FROM files f WHERE f.id=?", (fid,)
+    ).fetchone()
+    return f"{r[0]}:{r[1]}:{r[2]}"
+
+
+def _identical(c, fid):
+    """Ids of the other current files with the same SHA-256 (the same bytes)."""
+    return [
+        r[0]
+        for r in c.execute(
+            "SELECT f2.id FROM files f JOIN files f2 ON f2.sha256=f.sha256 WHERE f.id=? AND f2.current=1 AND f2.id<>f.id",
+            (fid,),
+        )
+    ]
+
+
+def _labels_of(c, fid):
+    return c.execute("SELECT source,kind,value FROM file_labels WHERE file_id=? ORDER BY kind,value", (fid,)).fetchall()
+
+
+def lookup(c, collection, root, path, distance=6):
+    """Labels of a file and of its copies: the file itself, files with identical content (same SHA-256) and, when it
+    has a pHash, visually similar files within `distance` bits. [(via, kind, value, source, file)], `via` being
+    'self', 'identical' or 'similar d=N'. The copies' labels are what makes this useful: a label on one copy of a
+    picture is found from another."""
+    row = c.execute(
+        "SELECT f.id FROM files f WHERE f.collection_id=? AND f.root=? AND f.path=? AND f.current=1",
+        (coll(c, collection)["id"], root, path),
+    ).fetchone()
+    if row is None:
+        return []
+    fid = row[0]
+    out = [("self", k, v, s, _name(c, fid)) for s, k, v in _labels_of(c, fid)]
+    same = _identical(c, fid)
+    for o in same:
+        out += [("identical", k, v, s, _name(c, o)) for s, k, v in _labels_of(c, o)]
+    from .visual import Index
+
+    for o, d in Index(c, distance).near(fid):
+        if o not in same:
+            out += [(f"similar d={d}", k, v, s, _name(c, o)) for s, k, v in _labels_of(c, o)]
+    for via, k, v, s, f in out:
+        print(f"{k}={v}  [{via}; {s or 'profile'}]  {f}")
+    return out
+
+
+def find(c, kind, value, collection=None, limit=20, similar=None):
+    """Paths of current files with the label (kind=value). With `similar` (a distance in bits, 0-63) also the files
+    that are identical (same SHA-256) or visually similar to one that has it, marked `~`: a label found on one copy
+    of a picture finds the others."""
     where = "l.kind=? AND l.value=? AND f.current=1" + (
         " AND f.collection_id=%d" % coll(c, collection)["id"] if collection else ""
     )
-    out = [
-        f"{n}:{root}:{path}"
-        for n, root, path in c.execute(
-            "SELECT (SELECT name FROM collections WHERE id=f.collection_id),f.root,f.path FROM file_labels l "
-            f"JOIN files f ON f.id=l.file_id WHERE {where} ORDER BY f.id LIMIT ?",
+    ids = [
+        r[0]
+        for r in c.execute(
+            f"SELECT DISTINCT f.id FROM file_labels l JOIN files f ON f.id=l.file_id WHERE {where} ORDER BY f.id LIMIT ?",
             (kind, value, limit),
         )
     ]
+    out = [_name(c, i) for i in ids]
+    if similar is not None:
+        from .visual import Index
+
+        idx = Index(c, similar)
+        have = set(ids)
+        for i in ids:
+            for o in _identical(c, i) + [o for o, _ in idx.near(i)]:
+                if o not in have:
+                    have.add(o)
+                    out.append("~ " + _name(c, o))
     for line in out:
         print(line)
     return out

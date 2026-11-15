@@ -1,7 +1,10 @@
 import json
 import os
+import sys
 
 import pytest
+
+sys.path.insert(0, os.path.dirname(__file__))  # test_visual's picture helper
 
 from filecat import cli, core, labels
 from filecat.profiles import Plain
@@ -149,3 +152,49 @@ def test_import_needs_a_source(db, fake, tmp_path):
     f.write_text("")
     with pytest.raises(SystemExit):
         cli.main(["labels", "--import", str(f)])
+
+
+def _pic_set(db, tree, fake):
+    from test_visual import pic
+
+    root = setup(
+        db, tree, {"a.png": b"", "copy.png": b"", "small.jpg": b"", "other.png": b"", "a.png.json": {"people": ["Ann"]}}
+    )
+    pic(root / "a.png", 1, (300, 200))
+    pic(root / "copy.png", 1, (300, 200))  # same bytes as a.png
+    pic(root / "small.jpg", 1, (90, 60), quality=70)  # same picture, other file
+    pic(root / "other.png", 9)
+    core.scan_root(db, core.coll(db, "c"), "r", str(root))
+    core.hash_pending(db, 30)
+    visual_hash(db)
+    labels.read_pending(db, 30)
+
+
+def visual_hash(db):
+    from filecat import visual
+
+    visual.hash_pending(db, 30, workers=1)
+
+
+def test_lookup_by_file_follows_identical_and_similar_copies(db, tree, fake, capsys):
+    _pic_set(db, tree, fake)
+    capsys.readouterr()
+    got = labels.lookup(db, "c", "r", "small.jpg")  # no label of its own, but a visually identical file has one
+    assert [(v, k, val) for v, k, val, _s, _f in got] == [("similar d=0", "person", "Ann")] or got[0][0].startswith(
+        "similar"
+    )
+    assert got[0][4].endswith("a.png")
+    own = labels.lookup(db, "c", "r", "copy.png")  # byte-identical to a.png: 'identical' (not repeated as similar)
+    assert [v for v, *_ in own] == ["identical"]
+    assert labels.lookup(db, "c", "r", "other.png") == []
+    assert labels.lookup(db, "c", "r", "missing.png") == []
+
+
+def test_find_by_label_can_follow_copies(db, tree, fake, capsys):
+    _pic_set(db, tree, fake)
+    assert labels.find(db, "person", "Ann") == ["c:r:a.png"]
+    out = labels.find(db, "person", "Ann", similar=6)
+    assert out[0] == "c:r:a.png" and sorted(out[1:]) == ["~ c:r:copy.png", "~ c:r:small.jpg"]
+    cli.main(["labels", "--find", "person=Ann", "--similar", "6"])
+    cli.main(["labels", "--of", "c:r:small.jpg"])
+    assert "person=Ann" in capsys.readouterr().out

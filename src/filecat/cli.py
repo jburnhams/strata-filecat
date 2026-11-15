@@ -48,6 +48,17 @@ def build_parser():
     x.add_argument("--collection")
     x.add_argument("--find", metavar="KIND=VALUE", help="list the files with a label instead of reading")
     x.add_argument(
+        "--similar",
+        type=int,
+        metavar="BITS",
+        help="with --find or --of: also follow identical copies and files within BITS of the pHash",
+    )
+    x.add_argument(
+        "--of",
+        metavar="COLLECTION:ROOT:PATH",
+        help="labels of this file and of its identical / visually similar copies",
+    )
+    x.add_argument(
         "--import",
         dest="import_",
         metavar="FILE",
@@ -99,9 +110,12 @@ def main(argv=None):
                 sys.exit("--import needs --source NAME")
             f = sys.stdin if a.import_ == "-" else open(a.import_, encoding="utf-8")
             labels.import_lines(c, f, a.source)
+        elif a.of:
+            coll_, root_, path_ = a.of.split(":", 2)
+            labels.lookup(c, coll_, root_, path_, 6 if a.similar is None else a.similar)
         elif a.find:
             kind, _, value = a.find.partition("=")
-            labels.find(c, kind, value, a.collection, a.limit)
+            labels.find(c, kind, value, a.collection, a.limit, a.similar)
         else:
             labels.read_pending(c, a.seconds, a.collection)
     elif a.cmd == "run":

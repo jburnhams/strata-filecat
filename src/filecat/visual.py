@@ -301,3 +301,38 @@ def similar(c, max_dist=6, across=False, limit=20, collection=None):
         print(line)
     print(f"{len(out)} groups of visually similar, byte-different images (distance <= {max_dist})")
     return lines
+
+
+class Index:
+    """pHashes of the current image files, to ask which files are within `max_dist` bits of a hash. Banding as in
+    `similar`: two hashes within d bits agree exactly on one of d+1 bands, so a query looks at d+1 buckets."""
+
+    def __init__(self, c, max_dist=6):
+        self.max_dist = max_dist
+        self.nb = max_dist + 1
+        self.width = -(-64 // self.nb)
+        self.hash = {}  # file id -> unsigned hash
+        self.buckets = {}
+        for fid, h in c.execute(
+            "SELECT f.id,v.hash FROM files f JOIN visual_hashes v ON v.file_id=f.id "
+            "WHERE f.current=1 AND f.state='ok' AND v.algo=? AND v.state='ok'",
+            (ALGO,),
+        ):
+            h = to_unsigned(h)
+            self.hash[fid] = h
+            for b in range(self.nb):
+                self.buckets.setdefault((b, (h >> (b * self.width)) & ((1 << self.width) - 1)), []).append(fid)
+
+    def near(self, fid):
+        """[(file id, distance)] of the other files within max_dist of file `fid` (empty if it has no hash)."""
+        h = self.hash.get(fid)
+        if h is None:
+            return []
+        seen = {}
+        for b in range(self.nb):
+            for other in self.buckets.get((b, (h >> (b * self.width)) & ((1 << self.width) - 1)), ()):
+                if other != fid and other not in seen:
+                    d = (h ^ self.hash[other]).bit_count()
+                    if d <= self.max_dist:
+                        seen[other] = d
+        return sorted(seen.items(), key=lambda x: x[1])
