@@ -2,6 +2,18 @@
 
 Newest first, grouped by day. One entry per change, in the same commit or PR as the change.
 
+## 2026-11-15
+
+**File labels from a profile (branch `file-labels`).** Exports often carry labels next to the file (a sidecar listing the people in a photo, say). filecat stays service-neutral: a profile opts in with `label_exts` and `labels(rel_path)`; filecat reads each current file once and stores the result.
+
+- `models.py`, migrations `8c561a25a69a` (tables) and `83083cb708ae` (`source` joins the primary key; existing rows kept): **new tables** `file_labels` (file_id, source, kind, value; index on kind, value) and `label_scans` (file_id, source, state ok / none / error: what has been looked at).
+- `labels.py`: **new**. `read_pending` (time-boxed, resumable; profiles without `labels` skipped), `summary`, `find`.
+- `cli.py`: `filecat labels [--seconds N] [--collection C]` reads; `filecat labels --find KIND=VALUE` lists files. `filecat run` also reads labels. `report` shows label counts per collection.
+- Callers can attach their own labels: `filecat labels --import FILE --source NAME` (JSON lines `{collection, root, path, labels: [[kind, value]]}`, `-` is stdin) or `labels.put(...)`; a re-import replaces that source's labels of the file, labels from other sources (the profile's own) stay; files not in the catalogue are counted, not added (scan first). Labels go next to the hashes: `file_labels` joins `files` and `visual_hashes`.
+- Lookups by label and by file that follow copies: `filecat labels --find KIND=VALUE [--similar BITS]` (the files with the label, plus files with identical content or within BITS of the pHash, marked `~`) and `filecat labels --of COLLECTION:ROOT:PATH [--similar BITS]` (the file's own labels and those of its identical and similar copies, with how each was reached and who set it). `visual.Index` answers "which files are within N bits" through banding.
+- `profiles.py` docstring: the optional `labels` hook.
+- Review fixes: the time budget is checked per file, and results are collected with no write transaction open and written in batches of 50, so a slow label source (network mount) cannot lock the catalogue for other writers.
+
 ## 2026-11-14 (later)
 
 **Visual hashes: reuse and workers (branch `visual-hash-reuse-workers`).** The first full run over a real photo library would decode every file row, including every byte-identical copy.

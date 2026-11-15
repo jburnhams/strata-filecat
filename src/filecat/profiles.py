@@ -4,6 +4,7 @@ A profile is a class with `__init__(cfg, root, strip=None, skip=None)`, `meta(ar
 `map(entry_name) -> (kind, path, orig)` where kind is 'ok' (path = stored path, orig = original path if it had to change, else None),
 'skip' (not extracted; path = what to record) or 'error'. It may also have `pending_archives(cfg)`: a classmethod yielding archive paths
 that should be ingested automatically by `filecat run`, in the order they were extracted.
+It may also have `label_exts` (lower-case extensions) and `labels(rel_path) -> [(kind, value)] | None`: labels read from the export next to a file (see labels.py).
 `plain` ships here; others are plugins registered in the entry point group `filecat.profiles` (e.g. `takeout` from strata-takeout).
 """
 

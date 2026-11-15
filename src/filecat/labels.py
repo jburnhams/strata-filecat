@@ -1,0 +1,209 @@
+"""Labels a profile reads from a file's own export: the people Google Takeout lists in a photo's sidecar, for instance.
+
+filecat knows nothing about any service. A profile opts in with two things: a class attribute `label_exts` (lower-case
+extensions, e.g. (".jpg", ".heic")) and a method `labels(rel_path) -> list[(kind, value)] | None` that looks for the
+label source next to the file (`rel_path` is the stored path under the profile's root) and returns None when the export
+has no label source for that file. Each current file row is looked at once (table `label_scans`); the labels go to
+`file_labels` (kind, value) and are queried with plain SQL, e.g. the files that share a label with a visually
+identical file (see `visual.py`).
+"""
+
+import time
+
+from .core import coll, roots_of
+from .profiles import load_profile
+
+
+def label_profile(cl, label, path):
+    cls = load_profile(cl["profile"])
+    if not hasattr(cls, "labels") or not getattr(cls, "label_exts", None):
+        return None
+    return cls(cl["config"], path)
+
+
+def pending_where(exts):
+    ext = " OR ".join(f"LOWER(f.path) LIKE '%{e}'" for e in exts)
+    return (
+        f"f.collection_id=? AND f.root=? AND f.current=1 AND f.state='ok' AND ({ext}) AND NOT EXISTS "
+        "(SELECT 1 FROM label_scans s WHERE s.file_id=f.id AND s.source=?)"
+    )
+
+
+def store(c, source, buf):
+    """Write a batch of (file id, state, labels) in one short transaction; returns (ok, none, error, labels) counts."""
+    nlab = 0
+    for fid, state, found in buf:
+        for kind, value in found:
+            c.execute("INSERT INTO file_labels(file_id,source,kind,value) VALUES(?,?,?,?)", (fid, source, kind, value))
+            nlab += 1
+        c.execute("INSERT INTO label_scans(file_id,source,state) VALUES(?,?,?)", (fid, source, state))
+    c.commit()
+    return (
+        sum(s == "ok" for _, s, _ in buf),
+        sum(s == "none" for _, s, _ in buf),
+        sum(s == "error" for _, s, _ in buf),
+        nlab,
+    )
+
+
+def put(c, collection, root, path, found, source):
+    """Attach labels (kind, value) to the current catalogue row of a file, replacing what `source` set before.
+    Returns False when the file is not in the catalogue (scan it first). For callers that know more about a file than
+    its export says: `filecat labels --import`, or this function directly."""
+    row = c.execute(
+        "SELECT f.id FROM files f WHERE f.collection_id=? AND f.root=? AND f.path=? AND f.current=1",
+        (coll(c, collection)["id"], root, path),
+    ).fetchone()
+    if row is None:
+        return False
+    c.execute("DELETE FROM file_labels WHERE file_id=? AND source=?", (row[0], source))
+    for kind, value in sorted({(str(k), str(v)) for k, v in found}):
+        c.execute("INSERT INTO file_labels(file_id,source,kind,value) VALUES(?,?,?,?)", (row[0], source, kind, value))
+    c.commit()
+    return True
+
+
+def import_lines(c, lines, source):
+    """Labels from JSON lines {"collection": ..., "root": ..., "path": ..., "labels": [["kind", "value"], ...]}."""
+    import json
+
+    done = unknown = bad = 0
+    for line in lines:
+        if not line.strip():
+            continue
+        try:
+            d = json.loads(line)
+            ok = put(c, d["collection"], d["root"], d["path"], [tuple(x) for x in d.get("labels", ())], source)
+        except (ValueError, KeyError, TypeError):
+            bad += 1
+            continue
+        done += ok
+        unknown += not ok
+    print(f"import: {done} files labelled by {source}, {unknown} not in the catalogue, {bad} unreadable lines")
+    return done
+
+
+def read_pending(c, seconds, only=None):
+    """Label every pending file of the collections whose profile can label, until the time budget is spent (resumable)."""
+    end = time.time() + seconds
+    done = none = bad = nlab = 0
+    names = [only] if only else [r[0] for r in c.execute("SELECT name FROM collections ORDER BY id").fetchall()]
+    for name in names:
+        cl = coll(c, name)
+        for label, (path, _auto) in roots_of(c, cl["id"]).items():
+            prof = label_profile(cl, label, path)
+            if prof is None:
+                continue
+            exts = tuple(prof.label_exts)
+            q = "SELECT f.id,f.path FROM files f WHERE " + pending_where(exts) + " AND f.id>? ORDER BY f.id LIMIT 500"
+            last = 0
+            while time.time() < end:
+                rows = c.execute(q, (cl["id"], label, cl["profile"], last)).fetchall()
+                c.commit()
+                if not rows:
+                    break
+                last = rows[-1][0]
+                buf = []  # results are collected with no write transaction open (a slow read must not lock the catalogue)
+                for fid, rel in rows:
+                    if time.time() >= end:
+                        break  # the rest stays pending for the next slice
+                    try:
+                        found = prof.labels(rel)
+                        state = "none" if found is None else "ok"
+                    except (OSError, ValueError):  # unreadable / malformed label source: recorded once, not retried
+                        found, state = None, "error"
+                    buf.append((fid, state, sorted(set(found or ()))))
+                    if len(buf) >= 50:
+                        d, n, b, k = store(c, cl["profile"], buf)
+                        done, none, bad, nlab, buf = done + d, none + n, bad + b, nlab + k, []
+                d, n, b, k = store(c, cl["profile"], buf)
+                done, none, bad, nlab = done + d, none + n, bad + b, nlab + k
+    print(f"labels: {done} files labelled ({nlab} labels), {none} without a label source, {bad} unreadable")
+    return done
+
+
+def summary(c, cid):
+    """[(kind, distinct values, labels)] of a collection's current files."""
+    return c.execute(
+        "SELECT l.kind,COUNT(DISTINCT l.value),COUNT(*) FROM file_labels l JOIN files f ON f.id=l.file_id "
+        "WHERE f.collection_id=? AND f.current=1 GROUP BY l.kind ORDER BY l.kind",
+        (cid,),
+    ).fetchall()
+
+
+def _name(c, fid):
+    r = c.execute(
+        "SELECT (SELECT name FROM collections WHERE id=f.collection_id),f.root,f.path FROM files f WHERE f.id=?", (fid,)
+    ).fetchone()
+    return f"{r[0]}:{r[1]}:{r[2]}"
+
+
+def _identical(c, fid):
+    """Ids of the other current files with the same SHA-256 (the same bytes)."""
+    return [
+        r[0]
+        for r in c.execute(
+            "SELECT f2.id FROM files f JOIN files f2 ON f2.sha256=f.sha256 WHERE f.id=? AND f2.current=1 AND f2.id<>f.id",
+            (fid,),
+        )
+    ]
+
+
+def _labels_of(c, fid):
+    return c.execute("SELECT source,kind,value FROM file_labels WHERE file_id=? ORDER BY kind,value", (fid,)).fetchall()
+
+
+def lookup(c, collection, root, path, distance=6):
+    """Labels of a file and of its copies: the file itself, files with identical content (same SHA-256) and, when it
+    has a pHash, visually similar files within `distance` bits. [(via, kind, value, source, file)], `via` being
+    'self', 'identical' or 'similar d=N'. The copies' labels are what makes this useful: a label on one copy of a
+    picture is found from another."""
+    row = c.execute(
+        "SELECT f.id FROM files f WHERE f.collection_id=? AND f.root=? AND f.path=? AND f.current=1",
+        (coll(c, collection)["id"], root, path),
+    ).fetchone()
+    if row is None:
+        return []
+    fid = row[0]
+    out = [("self", k, v, s, _name(c, fid)) for s, k, v in _labels_of(c, fid)]
+    same = _identical(c, fid)
+    for o in same:
+        out += [("identical", k, v, s, _name(c, o)) for s, k, v in _labels_of(c, o)]
+    from .visual import Index
+
+    for o, d in Index(c, distance).near(fid):
+        if o not in same:
+            out += [(f"similar d={d}", k, v, s, _name(c, o)) for s, k, v in _labels_of(c, o)]
+    for via, k, v, s, f in out:
+        print(f"{k}={v}  [{via}; {s or 'profile'}]  {f}")
+    return out
+
+
+def find(c, kind, value, collection=None, limit=20, similar=None):
+    """Paths of current files with the label (kind=value). With `similar` (a distance in bits, 0-63) also the files
+    that are identical (same SHA-256) or visually similar to one that has it, marked `~`: a label found on one copy
+    of a picture finds the others."""
+    where = "l.kind=? AND l.value=? AND f.current=1" + (
+        " AND f.collection_id=%d" % coll(c, collection)["id"] if collection else ""
+    )
+    ids = [
+        r[0]
+        for r in c.execute(
+            f"SELECT DISTINCT f.id FROM file_labels l JOIN files f ON f.id=l.file_id WHERE {where} ORDER BY f.id LIMIT ?",
+            (kind, value, limit),
+        )
+    ]
+    out = [_name(c, i) for i in ids]
+    if similar is not None:
+        from .visual import Index
+
+        idx = Index(c, similar)
+        have = set(ids)
+        for i in ids:
+            for o in _identical(c, i) + [o for o, _ in idx.near(i)]:
+                if o not in have:
+                    have.add(o)
+                    out.append("~ " + _name(c, o))
+    for line in out:
+        print(line)
+    return out

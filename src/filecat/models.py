@@ -92,3 +92,25 @@ class VisualHash(Base):
     hash: Mapped[int | None] = mapped_column(BigInteger, default=None)
     width: Mapped[int | None] = mapped_column(Integer, default=None)
     height: Mapped[int | None] = mapped_column(Integer, default=None)
+
+
+class FileLabel(Base):
+    """A label a profile read from the file's own export (a sidecar, a manifest): `kind` is the profile's vocabulary
+    ('person', 'album', ...), `value` the label. One row per (file row, kind, value)."""
+
+    __tablename__ = "file_labels"
+    __table_args__ = (Index("file_labels_kv", "kind", "value"),)
+    file_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    source: Mapped[str] = mapped_column(String, primary_key=True)
+    kind: Mapped[str] = mapped_column(String, primary_key=True)
+    value: Mapped[str] = mapped_column(String, primary_key=True)
+
+
+class LabelScan(Base):
+    """That a file row has been looked at for labels: 'ok' (labels read, maybe none listed), 'none' (the export has no
+    label source for it) or 'error' (unreadable). Without this row the file is pending, so each file is read once."""
+
+    __tablename__ = "label_scans"
+    file_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    source: Mapped[str] = mapped_column(String, primary_key=True)
+    state: Mapped[str] = mapped_column(String, server_default="ok", default="ok")
